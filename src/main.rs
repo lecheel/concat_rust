@@ -123,11 +123,6 @@ impl<'a> Compressor<'a> {
 }
 
 fn compress_code(code: &str, file_path: &str) -> (Vec<(String, String, String)>, String) {
-    // eprintln!(
-    // "=== CODE FOR {} (first 500 chars) ===\n{}\n=== END ===",
-    // file_path,
-    // &code[..code.len().min(500)]
-    // );
     let syntax_tree: File = match syn::parse_str(code) {
         Ok(f) => f,
         Err(e) => {
@@ -193,16 +188,11 @@ struct Args {
 fn run_rustfmt(code: &str, max_width: i32, original_path: &Path) -> String {
     let pid = std::process::id();
 
-    // Place the temporary .rs file in the SAME DIRECTORY as the original file.
-    // This is crucial so that `rustfmt` can successfully resolve `mod foo;`
-    // declarations by finding `foo.rs` in the same directory.
     let tmp_dir = match original_path.parent() {
         Some(p) if !p.as_os_str().is_empty() => p,
         _ => Path::new("."),
     };
     let in_path = tmp_dir.join(format!(".concat_rust_{}.rs", pid));
-
-    // The config file can safely stay in the system temp dir.
     let cfg_path = std::env::temp_dir().join(format!("concat_rust_{}.toml", pid));
 
     if let Err(e) = fs::write(&in_path, code) {
@@ -219,7 +209,7 @@ fn run_rustfmt(code: &str, max_width: i32, original_path: &Path) -> String {
 
     let result = Command::new("rustfmt")
         .arg("--edition")
-        .arg("2021") // Use modern Rust edition for `async fn` support
+        .arg("2021")
         .arg("--config-path")
         .arg(&cfg_path)
         .arg(&in_path)
@@ -264,7 +254,6 @@ fn remove_test_modules(code: &str) -> String {
         let stripped = line.trim();
         let mut is_test_start = false;
 
-        // Match both "mod test" and "mod tests"
         if stripped.starts_with("mod test") || stripped.starts_with("mod revert") {
             if line.contains('{') {
                 is_test_start = true;
@@ -332,7 +321,6 @@ fn remove_rust_comments(code: &str, _file_path: &str) -> String {
         match c {
             '/' => match chars.peek() {
                 Some('/') => {
-                    // Line comment - consume until newline
                     chars.next();
                     while let Some(&nc) = chars.peek() {
                         if nc == '\n' {
@@ -342,9 +330,7 @@ fn remove_rust_comments(code: &str, _file_path: &str) -> String {
                     }
                 }
                 Some('*') => {
-                    // Block comment - consume until */
                     chars.next();
-                    // Preserve newlines inside block comments to keep line structure
                     while let Some(nc) = chars.next() {
                         if nc == '\n' {
                             result.push(nc);
@@ -358,7 +344,6 @@ fn remove_rust_comments(code: &str, _file_path: &str) -> String {
                 _ => result.push(c),
             },
             '"' => {
-                // String literal - don't strip comments inside strings (e.g. URLs)
                 result.push(c);
                 while let Some(nc) = chars.next() {
                     result.push(nc);
@@ -401,15 +386,12 @@ fn find_rs_files(dir: &Path) -> Vec<PathBuf> {
 }
 
 // ------------------------------------------------------------
-// Daemon Cache & State  — ADD `skeleton` field
+// Daemon Cache & State
 // ------------------------------------------------------------
 #[derive(Serialize, Deserialize, Clone, Default)]
 struct DaemonCache {
-    // hash -> (filepath, body)
     bodies: HashMap<String, (String, String)>,
-    // filepath -> full cleaned code
     files: HashMap<String, String>,
-    // the full skeleton (compressed output) so the CLI can retrieve it
     #[serde(default)]
     skeleton: String,
 }
@@ -425,48 +407,120 @@ async fn get_body(
 ) -> impl axum::response::IntoResponse {
     let db = state.cache.lock().await;
 
-    // 1. Exact match — fastest path
-    if let Some((filepath, body)) = db.bodies.get(&prefix) {
+    // Split the query path by '+' or ',' to process multiple requested hashes.
+    let hashes: Vec<&str> = prefix
+        .split(|c| c == '+' || c == ',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if hashes.is_empty() {
         return (
-            axum::http::StatusCode::OK,
-            format!("// File: {}\n{}", filepath, body),
+            axum::http::StatusCode::BAD_REQUEST,
+            "No hashes provided".to_string(),
         );
     }
 
-    // 2. Prefix match — find all keys starting with the given prefix
-    let matches: Vec<(&String, &(String, String))> = db
-        .bodies
-        .iter()
-        .filter(|(hash, _)| hash.starts_with(&prefix))
-        .collect();
+    if hashes.len() == 1 {
+        let single_hash = hashes[0];
 
-    match matches.len() {
-        0 => (
-            axum::http::StatusCode::NOT_FOUND,
-            format!("No hash found matching prefix '{}'", prefix),
-        ),
-        1 => {
-            let (hash, (filepath, body)) = matches[0];
-            (
+        // 1. Exact match
+        if let Some((filepath, body)) = db.bodies.get(single_hash) {
+            return (
                 axum::http::StatusCode::OK,
-                format!("// File: {} (hash: {})\n{}", filepath, hash, body),
-            )
+                format!("//--+ file:///{}\n{}", filepath, body),
+            );
         }
-        _ => {
-            let list: Vec<String> = matches
+
+        // 2. Prefix match
+        let matches: Vec<(&String, &(String, String))> = db
+            .bodies
+            .iter()
+            .filter(|(hash, _)| hash.starts_with(single_hash))
+            .collect();
+
+        match matches.len() {
+            0 => (
+                axum::http::StatusCode::NOT_FOUND,
+                format!("No hash found matching prefix '{}'", single_hash),
+            ),
+            1 => {
+                let (hash, (filepath, body)) = matches[0];
+                (
+                    axum::http::StatusCode::OK,
+                    format!("//--+ file:///{}\n// Hash: {}\n{}", filepath, hash, body),
+                )
+            }
+            _ => {
+                let list: Vec<String> = matches
+                    .iter()
+                    .map(|(h, (f, _))| format!("  {}  ({})", h, f))
+                    .collect();
+                (
+                    axum::http::StatusCode::CONFLICT,
+                    format!(
+                        "Ambiguous prefix '{}' matches {} hashes:\n{}\nSend more characters to disambiguate.",
+                        single_hash,
+                        matches.len(),
+                        list.join("\n")
+                    ),
+                )
+            }
+        }
+    } else {
+        // Multi-hash requests (e.g., hash1+hash2)
+        let mut results = Vec::new();
+        let mut not_found = Vec::new();
+        let mut ambiguous = Vec::new();
+
+        for h in hashes {
+            // Check exact match first
+            if let Some((filepath, body)) = db.bodies.get(h) {
+                results.push(format!(
+                    "//--+ file:///{}\n// Hash: {}\n{}",
+                    filepath, h, body
+                ));
+                continue;
+            }
+
+            // Check prefix match
+            let matches: Vec<(&String, &(String, String))> = db
+                .bodies
                 .iter()
-                .map(|(h, (f, _))| format!("  {}  ({})", h, f))
+                .filter(|(hash, _)| hash.starts_with(h))
                 .collect();
-            (
-                axum::http::StatusCode::CONFLICT,
-                format!(
-                    "Ambiguous prefix '{}' matches {} hashes:\n{}\nSend more characters to disambiguate.",
-                    prefix,
-                    matches.len(),
-                    list.join("\n")
-                ),
-            )
+
+            match matches.len() {
+                0 => not_found.push(h.to_string()),
+                1 => {
+                    let (full_hash, (filepath, body)) = matches[0];
+                    results.push(format!(
+                        "//--+ file:///{}\n// Hash: {}\n{}",
+                        filepath, full_hash, body
+                    ));
+                }
+                _ => {
+                    let list: Vec<String> = matches
+                        .iter()
+                        .map(|(fh, (f, _))| format!("  {} ({})", fh, f))
+                        .collect();
+                    ambiguous.push(format!("'{}' matches:\n{}", h, list.join("\n")));
+                }
+            }
         }
+
+        if !not_found.is_empty() || !ambiguous.is_empty() {
+            let mut err_msg = String::new();
+            if !not_found.is_empty() {
+                err_msg.push_str(&format!("Hashes not found: {}\n", not_found.join(", ")));
+            }
+            if !ambiguous.is_empty() {
+                err_msg.push_str(&format!("Ambiguous prefixes:\n{}", ambiguous.join("\n")));
+            }
+            return (axum::http::StatusCode::BAD_REQUEST, err_msg);
+        }
+
+        (axum::http::StatusCode::OK, results.join("\n\n"))
     }
 }
 
@@ -476,7 +530,10 @@ async fn get_file(
 ) -> impl axum::response::IntoResponse {
     let db = state.cache.lock().await;
     if let Some(code) = db.files.get(&path) {
-        (axum::http::StatusCode::OK, code.clone())
+        (
+            axum::http::StatusCode::OK,
+            format!("//--+ file:///{}\n{}", path, code),
+        )
     } else {
         (
             axum::http::StatusCode::NOT_FOUND,
@@ -552,7 +609,6 @@ async fn main() {
             };
 
             let no_comments = remove_rust_comments(&formatted, &rel_str);
-            // let no_comments = remove_rust_comments_with_syn(&formatted, &rel_str);
             let no_tests = remove_test_modules(&no_comments);
             let no_empty = remove_empty_lines(&no_tests);
 
@@ -562,9 +618,10 @@ async fn main() {
                     cache.bodies.insert(hash, (filepath, body));
                 }
                 cache.files.insert(rel_str.clone(), no_empty);
-                parts.push(format!("//--+ {}\n{}", rel_str, skeleton));
+                // Prepend `file:///` scheme to the separator
+                parts.push(format!("//--+ file:///{}\n{}", rel_str, skeleton));
             } else {
-                parts.push(format!("//--+ {}\n{}", rel_str, no_empty));
+                parts.push(format!("//--+ file:///{}\n{}", rel_str, no_empty));
             }
         }
 
@@ -579,10 +636,11 @@ async fn main() {
                 "// === SKELETON MODE (COMPRESSED) ===\n\
                  // To retrieve the full implementation of a function/struct/impl block,\n\
                  // make an HTTP GET request to http://localhost:{}/<HASH>\n\
+                 // To retrieve multiple blocks at once, use '+' or ',' separator: http://localhost:{}/<HASH1>+<HASH2>\n\
                  // To retrieve a whole file, request http://localhost:{}/file/<FILEPATH>\n\
                  // To retrieve this skeleton, request http://localhost:{}/skeleton\n\
                  // ===================================\n\n",
-                args.daemon_port, args.daemon_port, args.daemon_port
+                args.daemon_port, args.daemon_port, args.daemon_port, args.daemon_port
             );
 
             let meta_prompt = format!(
@@ -596,19 +654,19 @@ async fn main() {
                  If you need a specific block, include its HASH (e.g., /* HASH:1a12fb93 */ for the OpenMode struct).\n\
                  A brief reason (e.g., “to know the fields of OpenMode”, “to see how SearchSelectMode is implemented for MRUMode”).\n\
                  Ask the user to provide the code for those items. The user may paste the code directly or tell you to fetch it via HTTP from http://localhost:{}/<HASH> or http://localhost:{}/file/<FILEPATH>.\n\
+                 You can also fetch multiple hashes at once by separating them with '+' or ',', like http://localhost:{}/HASH1+HASH2.\n\
                  Do not guess or stub missing implementations.\n\
                  Do not proceed until you have received all requested code.\n\
                  using as bash \n\
                  cli --skeleton \n\
                  cli --file models/application/modes/open/mod.rs file2.rs file3.rs  # all files in single line\n\
-                 cli HASH1 HASH2 ...                      # individual bodies\n\
+                 cli HASH1+HASH2                          # multiple bodies combined with file:/// tags\n\
                  ===",
-                args.daemon_port, args.daemon_port
+                args.daemon_port, args.daemon_port, args.daemon_port
             );
 
             combined = format!("{}{}{}", header, combined, meta_prompt);
 
-            // *** Store skeleton in cache so CLI can retrieve it ***
             cache.skeleton = combined.clone();
 
             let cache_json =
@@ -624,15 +682,11 @@ async fn main() {
         println!("Written to {} (original files unchanged).", args.output);
     }
 
-    // Start daemon if --compress was used (or implied by --resume)
     if args.compress || args.resume {
         let state = AppState {
             cache: Arc::new(Mutex::new(cache)),
         };
 
-        // NOTE: /skeleton is placed BEFORE /:hash — axum matches static
-        //       segments ahead of parameterized ones, so GET /skeleton
-        //       will not be captured by /:hash.
         let app = Router::new()
             .route("/skeleton", get(get_skeleton))
             .route("/file/*path", get(get_file))
@@ -642,6 +696,7 @@ async fn main() {
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.daemon_port));
         println!("Starting body retrieval daemon on http://{}", addr);
         println!("curl http://{}/<HASH>", addr);
+        println!("curl http://{}/<HASH1>+<HASH2>", addr);
         println!("curl http://{}/file/src/main.rs", addr);
         println!("curl http://{}/skeleton", addr);
 

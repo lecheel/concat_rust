@@ -57,16 +57,35 @@ async function fetchAndPaste(host, port, paramsStr) {
     if (params.has('skeleton')) {
       await fetchUrl(`${baseUrl}/skeleton`, 'SKELETON (full output)');
     } else {
-      for (const hash of params.getAll('hash')) {
-        const resp = await fetch(`${baseUrl}/${hash}`);
-        if (!resp.ok) throw new Error(`Hash ${hash} -> HTTP ${resp.status}`);
+      const hashes = params.getAll('hash');
+      if (hashes.length > 0) {
+        // Combine all hashes into a single HTTP request using '+' delimiter
+        const hashQuery = hashes.join('+');
+        const resp = await fetch(`${baseUrl}/${hashQuery}`);
+        if (!resp.ok) {
+          throw new Error(`Hashes query failed (HTTP ${resp.status})`);
+        }
         const text = await resp.text();
-        const firstLine = text.split('\n')[0] || '';
-        const filename = firstLine.startsWith('// File: ') ? firstLine.slice(9) : 'unknown';
         if (clipboardContent) clipboardContent += '\n\n';
         clipboardContent += text;
-        summaries.push(`${hash.slice(0, 8)}… (${filename})`);
+
+        // Extract and aggregate file paths from the combined output's `file:///` headers
+        const lines = text.split('\n');
+        const foundFiles = new Set();
+        for (const line of lines) {
+          if (line.startsWith('//--+ file:///')) {
+            foundFiles.add(line.replace('//--+ file:///', ''));
+          }
+        }
+        
+        if (foundFiles.size > 0) {
+          const filesList = Array.from(foundFiles).join(', ');
+          summaries.push(`${hashes.length} block(s) -> [${filesList}]`);
+        } else {
+          summaries.push(`${hashes.length} block(s)`);
+        }
       }
+
       for (const filepath of params.getAll('file')) {
         await fetchUrl(`${baseUrl}/file/${encodeURIComponent(filepath)}`, filepath);
       }
@@ -144,7 +163,7 @@ function findBestEditable() {
     return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) > 0;
   };
 
-  // Textareas — highest priority (big area = likely chat/compose)
+  // Textareas
   document.querySelectorAll('textarea').forEach(el => {
     if (isVisible(el)) candidates.push({ el, priority: 3 });
   });
@@ -154,14 +173,13 @@ function findBestEditable() {
     if (isVisible(el)) candidates.push({ el, priority: 2 });
   });
 
-  // Contenteditable divs (many chat apps use these)
+  // Contenteditable divs
   document.querySelectorAll('[contenteditable="true"], [contenteditable=""]').forEach(el => {
     if (isVisible(el)) candidates.push({ el, priority: 1 });
   });
 
   if (candidates.length === 0) return null;
 
-  // Sort: priority desc, then area desc (larger = more likely the main input)
   candidates.sort((a, b) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
     const aArea = a.el.offsetWidth * a.el.offsetHeight;
