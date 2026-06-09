@@ -17,6 +17,16 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Clear buttons ──
+  const clearQuickCommandBtn = document.getElementById('clearQuickCommand');
+  const quickCommandInput = document.getElementById('quickCommand');
+  if (clearQuickCommandBtn && quickCommandInput) {
+    clearQuickCommandBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      quickCommandInput.value = '';
+      quickCommandInput.focus();
+    });
+  }
+
   const clearHashesBtn = document.getElementById('clearHashes');
   const hashesInput = document.getElementById('hashes');
   if (clearHashesBtn && hashesInput) {
@@ -82,7 +92,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   // ── Quick Command Parser ──
-  const quickCommandInput = document.getElementById('quickCommand');
   if (quickCommandInput) {
     quickCommandInput.addEventListener('input', () => {
       const line = quickCommandInput.value.trim();
