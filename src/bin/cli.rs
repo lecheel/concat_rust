@@ -81,30 +81,46 @@ fn main() {
                 }
             }
         }
-    } else {
-        // Handle hash(es) request
-        for hash in &args.hashes {
-            let url = format!("http://{}:{}/{}", args.host, args.port, hash);
-            match fetch_url(&url) {
-                Ok(body) => {
-                    let filename = body
-                        .lines()
-                        .next()
-                        .and_then(|l| l.strip_prefix("// File: "))
-                        .unwrap_or("unknown");
-
-                    summaries.push(format!("HASH {} (File: {})", hash, filename));
-
-                    if !clipboard_content.is_empty() {
-                        clipboard_content.push_str("\n\n");
+    } else if !args.hashes.is_empty() {
+        // Handle hash(es) request by combining them using the '+' delimiter for a single request
+        let hash_query = args.hashes.join("+");
+        let url = format!("http://{}:{}/{}", args.host, args.port, hash_query);
+        match fetch_url(&url) {
+            Ok(body) => {
+                // Find all unique filenames from the return payload (looking for //--+ file:///<path>)
+                let mut found_files = std::collections::BTreeSet::new();
+                for line in body.lines() {
+                    if let Some(path) = line.strip_prefix("//--+ file:///") {
+                        found_files.insert(path.to_string());
                     }
-                    clipboard_content.push_str(&body);
                 }
-                Err(e) => {
-                    eprintln!("Error retrieving hash {}: {}", hash, e);
-                }
+
+                let files_str = if found_files.is_empty() {
+                    "unknown".to_string()
+                } else {
+                    found_files.into_iter().collect::<Vec<_>>().join(", ")
+                };
+
+                summaries.push(format!(
+                    "Hashes: [{}] (Files: {})",
+                    args.hashes.join(", "),
+                    files_str
+                ));
+
+                clipboard_content = body;
+            }
+            Err(e) => {
+                eprintln!(
+                    "Error retrieving hashes [{}]: {}",
+                    args.hashes.join(", "),
+                    e
+                );
+                std::process::exit(1);
             }
         }
+    } else {
+        eprintln!("No fetch targets provided. Please specify one or more hashes, --file <path>, or --skeleton.");
+        std::process::exit(1);
     }
 
     if clipboard_content.is_empty() {
