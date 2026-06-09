@@ -1,0 +1,23 @@
+[package]
+name = "grab"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "cli"
+path = "src/bin/cli.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+regex = "1"
+sha2 = "0.10"
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["blocking"] }
+arboard = "3.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uncomment = "3.0.3"
+syn = { version = "2", features = ["full", "visit"] }
+quote = "1"
+proc-macro2 = "1"
