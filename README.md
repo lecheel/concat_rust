@@ -16,6 +16,11 @@ This minimizes token consumption, preserves your daily message allowance, and pr
 
 ---
 
+
+![image](./concat1.png)
+![image](./concat2.png)
+
+
 ## How It Works
 
 Using `concat_rust` splits your project representation into a structural outline and granular details:
