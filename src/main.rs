@@ -185,64 +185,128 @@ struct Args {
 // ------------------------------------------------------------
 // Helper: run rustfmt
 // ------------------------------------------------------------
-fn run_rustfmt(code: &str, max_width: i32, original_path: &Path) -> String {
-    let pid = std::process::id();
+fn run_rustfmt(code: &str, max_width: i32) -> String {
+    // Strip all extern mod declarations (bare `mod foo;` lines, any visibility).
+    // rustfmt in isolation can't resolve sibling files. These lines contain no
+    // formatting-sensitive content so round-tripping through a placeholder is lossless.
+    let (stripped, placeholders) = strip_mod_decls(code);
 
-    let tmp_dir = match original_path.parent() {
-        Some(p) if !p.as_os_str().is_empty() => p,
-        _ => Path::new("."),
-    };
-    let in_path = tmp_dir.join(format!(".concat_rust_{}.rs", pid));
-    let cfg_path = std::env::temp_dir().join(format!("concat_rust_{}.toml", pid));
+    let max_width_config = format!("max_width={}", max_width);
 
-    if let Err(e) = fs::write(&in_path, code) {
-        eprintln!("Warning: could not write temp file for rustfmt: {}", e);
-        return code.to_string();
-    }
-
-    let config = format!("max_width = {}\n", max_width);
-    if let Err(e) = fs::write(&cfg_path, &config) {
-        eprintln!("Warning: could not write rustfmt config: {}", e);
-        let _ = fs::remove_file(&in_path);
-        return code.to_string();
-    }
-
-    let result = Command::new("rustfmt")
+    let mut child = match Command::new("rustfmt")
         .arg("--edition")
         .arg("2021")
-        .arg("--config-path")
-        .arg(&cfg_path)
-        .arg(&in_path)
-        .output();
-
-    let formatted = match result {
-        Ok(output) => {
-            if output.status.success() {
-                fs::read_to_string(&in_path).unwrap_or_else(|e| {
-                    eprintln!("Warning: failed to read rustfmt output: {}", e);
-                    code.to_string()
-                })
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                eprintln!("Warning: rustfmt failed:\n{}", stderr.trim());
-                code.to_string()
-            }
-        }
+        .arg("--config")
+        .arg(&max_width_config)
+        .arg("--config")
+        .arg("edition=2021")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
         Err(e) => {
             eprintln!("Warning: rustfmt execution failed: {}", e);
-            code.to_string()
+            return code.to_string();
         }
     };
 
-    let _ = fs::remove_file(&in_path);
-    let _ = fs::remove_file(&cfg_path);
+    // Write to stdin
+    if let Some(mut stdin) = child.stdin.take() {
+        use std::io::Write;
+        if let Err(e) = stdin.write_all(stripped.as_bytes()) {
+            eprintln!("Warning: failed to write to rustfmt stdin: {}", e);
+            return code.to_string();
+        }
+    }
 
-    formatted
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("Warning: rustfmt wait failed: {}", e);
+            return code.to_string();
+        }
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        eprintln!("Warning: rustfmt failed: {}", stderr.trim());
+        return restore_mod_decls(&stripped, &placeholders);
+    }
+
+    let formatted = match String::from_utf8(output.stdout) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Warning: rustfmt output was not valid UTF-8: {}", e);
+            return restore_mod_decls(&stripped, &placeholders);
+        }
+    };
+
+    restore_mod_decls(&formatted, &placeholders)
 }
 
-// ------------------------------------------------------------
-// Cleanup functions
-// ------------------------------------------------------------
+/// Replace every `mod foo;` line (any visibility, optional attributes on the
+/// same line) with a unique sentinel comment.  Returns the scrubbed source and
+/// a list of (sentinel, original_line) pairs in order.
+fn strip_mod_decls(code: &str) -> (String, Vec<(String, String)>) {
+    let mut placeholders = Vec::new();
+    let mut out_lines = Vec::new();
+
+    for line in code.lines() {
+        let trimmed = line.trim();
+
+        // Match: (optional pub / pub(…) / pub(crate)) mod <ident> ;
+        // Also match lines that are *only* a mod decl — ignore `mod foo { …`
+        if is_mod_decl(trimmed) {
+            let sentinel = format!("// __MOD_{:04}__", placeholders.len());
+            placeholders.push((sentinel.clone(), line.to_string()));
+            out_lines.push(sentinel);
+        } else {
+            out_lines.push(line.to_string());
+        }
+    }
+
+    (out_lines.join("\n"), placeholders)
+}
+
+fn is_mod_decl(trimmed: &str) -> bool {
+    // Strip leading attributes like #[cfg(test)] if on the same line
+    let s = trimmed
+        .trim_start_matches(|c: char| {
+            c == '#'
+                || c == '['
+                || c == ']'
+                || c.is_alphanumeric()
+                || c == '('
+                || c == ')'
+                || c == '"'
+                || c == ','
+                || c == '='
+        })
+        .trim();
+
+    // Work through optional visibility
+    let s = s.strip_prefix("pub").unwrap_or(s).trim();
+    // pub(crate), pub(super), pub(in path)
+    let s = if s.starts_with('(') {
+        s.splitn(2, ')').nth(1).unwrap_or(s).trim()
+    } else {
+        s
+    };
+
+    // Must start with `mod ` and end with `;` — no `{` (that's an inline module)
+    s.starts_with("mod ") && trimmed.ends_with(';') && !trimmed.contains('{')
+}
+
+fn restore_mod_decls(code: &str, placeholders: &[(String, String)]) -> String {
+    let mut result = code.to_string();
+    for (sentinel, original) in placeholders {
+        result = result.replace(sentinel.as_str(), original.as_str());
+    }
+    result
+}
+
 fn remove_test_modules(code: &str) -> String {
     let lines: Vec<&str> = code.lines().collect();
     let mut result = Vec::new();
@@ -421,6 +485,11 @@ async fn get_body(
         );
     }
 
+    // Display the requested hashes on a single line in the server terminal (debug info)
+    use std::io::Write;
+    print!("{} ", hashes.join(" "));
+    let _ = std::io::stdout().flush();
+
     if hashes.len() == 1 {
         let single_hash = hashes[0];
 
@@ -528,6 +597,11 @@ async fn get_file(
     AxumPath(path): AxumPath<String>,
     state: axum::extract::State<AppState>,
 ) -> impl axum::response::IntoResponse {
+    // Display the requested filename on a single line in the server terminal (debug info)
+    use std::io::Write;
+    print!("{} ", path);
+    let _ = std::io::stdout().flush();
+
     let db = state.cache.lock().await;
     if let Some(code) = db.files.get(&path) {
         (
@@ -603,7 +677,7 @@ async fn main() {
             };
 
             let formatted = if !args.no_format {
-                run_rustfmt(&raw_code, args.max_width, fp)
+                run_rustfmt(&raw_code, args.max_width)
             } else {
                 raw_code
             };
