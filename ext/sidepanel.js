@@ -155,8 +155,10 @@ async function doFetch() {
   if (skeletonChecked) {
     params.set('skeleton', 'true');
   } else {
-    const hashes = hashesText.split(/[\r\n\s]+/).map(h => h.trim()).filter(Boolean);
+    // FIX: Added ',' to the regex so comma-separated hashes in the textarea are split correctly
+    const hashes = hashesText.split(/[\r\n\s,]+/).map(h => h.trim()).filter(Boolean);
     const files  = filesText.split(/[\s,]+/).map(f => f.trim()).filter(Boolean);
+    
     if (hashes.length === 0 && files.length === 0) {
       setStatus('error', 'Add at least one hash, file path, or enable skeleton.');
       return;
@@ -238,12 +240,16 @@ function parseCommandLine(line) {
         i++; 
       }
     } else {
-      const cleanToken = token.replace(/['",]/g, '').trim();
-      if (cleanToken) {
-        if (parsingFiles) {
-          files.push(cleanToken);
-        } else {
-          hashes.push(cleanToken);
+      // FIX: Split the token by comma first, then clean each part individually.
+      // This prevents "hash1,hash2" from merging into "hash1hash2"
+      const parts = token.split(',').map(p => p.replace(/['"]/g, '').trim()).filter(Boolean);
+      for (const cleanToken of parts) {
+        if (cleanToken) {
+          if (parsingFiles) {
+            files.push(cleanToken);
+          } else {
+            hashes.push(cleanToken);
+          }
         }
       }
     }
