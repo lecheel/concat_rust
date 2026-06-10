@@ -731,10 +731,11 @@ async fn main() {
                  You can also fetch multiple hashes at once by separating them with '+' or ',', like http://localhost:{}/HASH1+HASH2.\n\
                  Do not guess or stub missing implementations.\n\
                  Do not proceed until you have received all requested code.\n\
+                 following the design pattern \n\
                  using as bash \n\
                  cli --skeleton \n\
-                 cli --file models/application/modes/open/mod.rs,file2.rs,file3.rs  # all files in single line\n\
-                 cli HASH1,HASH2                          # multiple bodies combined with file:/// tags\n\
+                 cli --file models/application/modes/open/mod.rs file2.rs file3.rs  # all files in single line\n\
+                 cli HASH1 HASH2                          # multiple bodies combined with file:/// tags\n\
                  ===",
                 args.daemon_port, args.daemon_port, args.daemon_port
             );
