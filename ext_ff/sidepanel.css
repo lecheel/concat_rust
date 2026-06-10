@@ -1,0 +1,8 @@
+html,
+body {
+  margin: 0;
+  padding: 8px;
+  background: var(--bg-color, #ffffff);
+  color: var(--text-color, #1a1a1a);
+  min-height: 100%;
+}

@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Concat Rust Paster",
+  "version": "1.1",
+  "description": "Retrieve code bodies from local concat_rust daemon and paste into page",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "clipboardWrite",
+    "clipboardRead",
+    "contextMenus",
+    "storage"
+  ],
+  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*", "<all_urls>"],
+  "background": {
+    "scripts": ["background.js"]
+  },
+  "action": {
+    "default_title": "Open Concat Rust Paster"
+  },
+  "sidebar_action": {
+    "default_panel": "sidepanel.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "concat-rust-paster@localhost",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  }
+}
