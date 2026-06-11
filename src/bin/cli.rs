@@ -59,7 +59,7 @@ enum Commands {
 
     /// Fetch whole file(s) by path
     File {
-        /// File paths (e.g., core/src/main.rs api/docker-compose.yml)
+        /// File paths (comma or space separated, e.g., lib.rs main.rs or lib.rs,main.rs)
         paths: Vec<String>,
     },
 
@@ -443,23 +443,31 @@ fn cmd_file(paths: &[String], base: &str, warn_loc: usize) {
     let mut summaries = Vec::new();
 
     for p in paths {
-        let resolved = resolve_path(p, active.as_deref());
-
-        if resolved != *p {
-            eprintln!("  → resolved: {}", resolved);
-        }
-
-        let url = format!("{}/file/{}", base, resolved);
-        match fetch_text(&url) {
-            Ok(body) => {
-                let loc = body.lines().count();
-                if !full_content.is_empty() {
-                    full_content.push_str("\n\n");
-                }
-                full_content.push_str(&body);
-                summaries.push(format!("File: {} [{} LOC]", resolved, loc));
+        // Support both space-separated and comma-separated paths
+        for part in p.split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
             }
-            Err(e) => eprintln!("❌ {}: {}", resolved, e),
+
+            let resolved = resolve_path(part, active.as_deref());
+
+            if resolved != part {
+                eprintln!("  → resolved: {}", resolved);
+            }
+
+            let url = format!("{}/file/{}", base, resolved);
+            match fetch_text(&url) {
+                Ok(body) => {
+                    let loc = body.lines().count();
+                    if !full_content.is_empty() {
+                        full_content.push_str("\n\n");
+                    }
+                    full_content.push_str(&body);
+                    summaries.push(format!("File: {} [{} LOC]", resolved, loc));
+                }
+                Err(e) => eprintln!("❌ {}: {}", resolved, e),
+            }
         }
     }
 

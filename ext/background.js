@@ -55,7 +55,9 @@ async function fetchAndPaste(host, port, paramsStr) {
 
   try {
     if (params.has('skeleton')) {
-      await fetchUrl(`${baseUrl}/skeleton`, 'SKELETON (full output)');
+      const repo = params.get('repo') || '';
+      const url = repo ? `${baseUrl}/skeleton?repo=${encodeURIComponent(repo)}` : `${baseUrl}/skeleton`;
+      await fetchUrl(url, 'SKELETON (full output)');
     } else {
       const hashes = params.getAll('hash');
       if (hashes.length > 0) {
@@ -87,7 +89,9 @@ async function fetchAndPaste(host, port, paramsStr) {
       }
 
       for (const filepath of params.getAll('file')) {
-        await fetchUrl(`${baseUrl}/file/${encodeURIComponent(filepath)}`, filepath);
+        // Encode path segments individually to preserve slashes for Axum *path matching
+        const safePath = filepath.split('/').map(encodeURIComponent).join('/');
+        await fetchUrl(`${baseUrl}/file/${safePath}`, filepath);
       }
     }
 

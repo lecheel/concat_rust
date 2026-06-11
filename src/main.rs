@@ -125,14 +125,14 @@ async fn main() {
         // Read routes
         .route("/skeleton", get(routes_read::get_skeleton))
         .route("/catalog", get(routes_read::get_catalog))
-        .route("/info/{hash}", get(routes_read::get_body_info))
+        .route("/info/:hash", get(routes_read::get_body_info)) // ← :hash
         .route("/file-info/*path", get(routes_read::get_file_info))
         .route("/file/*path", get(routes_read::get_file))
-        .route("/{hash}", get(routes_read::get_body))
+        .route("/:hash", get(routes_read::get_body)) // ← :hash
         // Write/Sync routes
         .route("/repos", get(routes_write::get_repos))
         .route("/repos", post(routes_write::post_repo_add))
-        .route("/repos/{id}", delete(routes_write::delete_repo))
+        .route("/repos/:id", delete(routes_write::delete_repo)) // ← :id
         .route("/sync", post(routes_write::post_sync))
         .with_state(state);
 

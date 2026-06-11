@@ -1,4 +1,16 @@
 document.addEventListener('DOMContentLoaded', () => {
+// ── Dynamic Header Title ──
+function updateHeaderTitle() {
+  const activeRepoInput = document.getElementById('activeRepo');
+  const headerTitle = document.getElementById('headerTitle');
+  if (!headerTitle) return;
+  
+  const repo = activeRepoInput ? activeRepoInput.value.trim() : '';
+  headerTitle.textContent = repo 
+    ? `Concat Rust Paster (repo ${repo})` 
+    : 'Concat Rust Paster';
+}    
+   
   // ── Skeleton toggle ──
   let skeletonChecked = false;
   const skeletonRow = document.getElementById('skeletonRow');
@@ -47,26 +59,38 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── Restore saved host/port ──
+
+  // ── Restore saved host/port/repo ──
   const hostInput = document.getElementById('host');
   const portInput = document.getElementById('port');
+  const activeRepoInput = document.getElementById('activeRepo');
 
-  chrome.storage.local.get(['host', 'port'], (result) => {
+  chrome.storage.local.get(['host', 'port', 'activeRepo'], (result) => {
     if (result.host && hostInput) hostInput.value = result.host;
     if (result.port && portInput) portInput.value = result.port;
+    if (result.activeRepo && activeRepoInput) activeRepoInput.value = result.activeRepo;
+    
+    // Update header title with restored repo
+    updateHeaderTitle();
   });
 
-  ['host', 'port'].forEach(id => {
+  ['host', 'port', 'activeRepo'].forEach(id => {
     const inputEl = document.getElementById(id);
     if (inputEl) {
       inputEl.addEventListener('change', () => {
         chrome.storage.local.set({
           host: hostInput ? hostInput.value : '127.0.0.1',
-          port: portInput ? portInput.value : '7890'
+          port: portInput ? portInput.value : '7890',
+          activeRepo: activeRepoInput ? activeRepoInput.value.trim() : ''
         });
       });
     }
   });
+
+  // Live-update header title as user types in the repo field
+  if (activeRepoInput) {
+    activeRepoInput.addEventListener('input', updateHeaderTitle);
+  }
 
   // ── Fetch & Paste ──
   const fetchBtn = document.getElementById('fetchBtn');
@@ -116,10 +140,46 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
           if (skeletonChecked && skeletonRow) skeletonRow.click();
         }
+
+        if (parsed.repo && activeRepoInput) {
+          activeRepoInput.value = parsed.repo;
+          chrome.storage.local.set({ activeRepo: parsed.repo });
+          updateHeaderTitle();
+        }
       }
     });
   }
 });
+
+// ── V2 Path Resolution Logic ─────────────────────────────────
+
+const ROOT_LEVEL_FILES = [
+  "Cargo.toml", "Cargo.lock", "docker-compose.yml", "docker-compose.yaml",
+  "Dockerfile", ".env", ".env.example", "Makefile", "README.md", "build.rs"
+];
+
+function shouldAutoPrefixSrc(path) {
+  if (path.startsWith("src/") || path.includes("/src/")) return false;
+  const filename = path.split('/').pop();
+  if (ROOT_LEVEL_FILES.includes(filename)) return false;
+  if (path.includes('/')) return true;
+  if (path.endsWith('.rs')) return true;
+  return false;
+}
+
+function resolvePath(input, activeRepo) {
+  let withSrc = shouldAutoPrefixSrc(input) ? `src/${input}` : input;
+  
+  if (activeRepo) {
+    const repoPrefix = `${activeRepo}/`;
+    if (withSrc.startsWith(repoPrefix)) {
+      return withSrc;
+    } else {
+      return `${repoPrefix}${withSrc}`;
+    }
+  }
+  return withSrc;
+}
 
 // ── Status helpers ──
 function setStatus(type, html) {
@@ -142,11 +202,13 @@ async function doFetch() {
   const filesInput  = document.getElementById('files');
   const hostInput   = document.getElementById('host');
   const portInput   = document.getElementById('port');
+  const activeRepoInput = document.getElementById('activeRepo');
 
   const hashesText = hashesInput ? hashesInput.value : '';
   const filesText  = filesInput ? filesInput.value : '';
   let host = (hostInput ? hostInput.value.trim() : '') || '127.0.0.1';
   let port = (portInput ? portInput.value.trim() : '') || '7890';
+  const activeRepo = activeRepoInput ? activeRepoInput.value.trim() : '';
 
   const params = new URLSearchParams();
 
@@ -154,17 +216,22 @@ async function doFetch() {
 
   if (skeletonChecked) {
     params.set('skeleton', 'true');
+    if (activeRepo) {
+      params.set('repo', activeRepo);
+    }
   } else {
-    // FIX: Added ',' to the regex so comma-separated hashes in the textarea are split correctly
     const hashes = hashesText.split(/[\r\n\s,]+/).map(h => h.trim()).filter(Boolean);
-    const files  = filesText.split(/[\s,]+/).map(f => f.trim()).filter(Boolean);
+    const rawFiles = filesText.split(/[\s,]+/).map(f => f.trim()).filter(Boolean);
     
-    if (hashes.length === 0 && files.length === 0) {
+    // V2: Resolve file paths with active repo
+    const resolvedFiles = rawFiles.map(f => resolvePath(f, activeRepo));
+    
+    if (hashes.length === 0 && resolvedFiles.length === 0) {
       setStatus('error', 'Add at least one hash, file path, or enable skeleton.');
       return;
     }
     hashes.forEach(h => params.append('hash', h));
-    files.forEach(f => params.append('file', f));
+    resolvedFiles.forEach(f => params.append('file', f));
   }
 
   const btn = document.getElementById('fetchBtn');
@@ -199,9 +266,8 @@ async function doFetch() {
 }
 
 /**
- * Normalizes and extracts parameters from command lines such as:
- * - cli --file main.rs lib.rs
- * - cli hash1 hash2
+ * V2 Command Line Parser
+ * Supports: cli use grab file lib.rs main.rs OR cli 83d650c708ad
  */
 function parseCommandLine(line) {
   const tokens = line.trim().split(/\s+/);
@@ -225,27 +291,33 @@ function parseCommandLine(line) {
   const files = [];
   let parsingFiles = false;
   let skeleton = false;
+  let repo = '';
 
   for (let i = startIndex; i < tokens.length; i++) {
     const token = tokens[i];
     if (!token) continue;
 
-    if (token === '--file' || token === '-f') {
+    if (token === '--file' || token === '-f' || token.toLowerCase() === 'file') {
       parsingFiles = true;
-    } else if (token === '--skeleton' || token === '-s') {
+    } else if (token === '--skeleton' || token === '-s' || token.toLowerCase() === 'skeleton') {
       skeleton = true;
+    } else if (token === '--repo' || token === '-r' || token.toLowerCase() === 'use' || token.toLowerCase() === 'repo') {
+      // Extract repo name (e.g., 'cli use grab' or 'cli --repo grab')
+      if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) {
+        repo = tokens[++i].replace(/['"]/g, '');
+      }
     } else if (token.startsWith('-')) {
       parsingFiles = false;
       if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) {
         i++; 
       }
     } else {
-      // FIX: Split the token by comma first, then clean each part individually.
-      // This prevents "hash1,hash2" from merging into "hash1hash2"
+      // Split by comma first, then clean each part individually
       const parts = token.split(',').map(p => p.replace(/['"]/g, '').trim()).filter(Boolean);
       for (const cleanToken of parts) {
         if (cleanToken) {
-          if (parsingFiles) {
+          // Heuristic: if it contains a dot or slash, treat as a file
+          if (parsingFiles || cleanToken.includes('.') || cleanToken.includes('/')) {
             files.push(cleanToken);
           } else {
             hashes.push(cleanToken);
@@ -255,7 +327,7 @@ function parseCommandLine(line) {
     }
   }
 
-  return { hashes, files, skeleton };
+  return { hashes, files, skeleton, repo };
 }
 
 function escapeHtml(str) {
