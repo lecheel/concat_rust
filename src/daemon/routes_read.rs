@@ -10,8 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::state::AppState;
 
 // ── Helper to build responses with dynamic headers ──────────
-
-fn build_response(status: StatusCode, headers: Vec<(&str, String)>, body: String) -> Response {
+pub fn build_response(status: StatusCode, headers: Vec<(&str, String)>, body: String) -> Response {
     let mut response = (status, body).into_response();
     for (key, value) in headers {
         if let Ok(name) = key.parse::<axum::http::header::HeaderName>() {

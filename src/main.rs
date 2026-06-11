@@ -1,7 +1,18 @@
 //--+ src/main.rs
 
 use clap::Parser;
-use grab::stable_hash;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+use axum::routing::{get, post};
+use grab::cache::DaemonCache;
+use grab::config::ScanConfig;
+use grab::daemon::routes_read;
+use grab::daemon::routes_write;
+use grab::daemon::state::AppState;
+use grab::registry::RepoRegistry;
+use grab::scanner;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -38,14 +49,118 @@ struct Args {
     cache: String,
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
+    let central_dir = PathBuf::from(&args.central_dir);
 
-    println!(" concat_rust v2 starting...");
-    println!("  Central dir : {}", args.central_dir);
-    println!("  Daemon port : {}", args.port);
+    // Ensure central dir exists
+    std::fs::create_dir_all(&central_dir).expect("Failed to create central dir");
 
-    // Quick sanity check that our library is linked and stable_hash works
-    let h = stable_hash::stable_hash_body("fn main() {}", "src/main.rs");
-    println!("  Sanity hash : {} (should be the same every run)", h);
+    // ── Load Registry & Cache ──
+    let registry = RepoRegistry::load_or_create(&central_dir);
+    let mut cache = DaemonCache::default();
+    cache.cache_path = args.cache.clone();
+
+    if PathBuf::from(&args.cache).exists() {
+        if let Ok(loaded) = DaemonCache::load(&args.cache) {
+            cache = loaded;
+        }
+    }
+
+    let registry = Arc::new(Mutex::new(registry));
+    let cache = Arc::new(Mutex::new(cache));
+
+    // ── Initial Sync ──
+    if !args.no_sync {
+        println!("🔄 Initial sync...");
+        let changed =
+            grab::sync_runner::sync_all_repos(registry.clone(), central_dir.clone()).await;
+        println!("🔄 {} files changed", changed.len());
+    }
+
+    // ── Initial Index ──
+    println!("🔍 Indexing central dir...");
+    let config = ScanConfig::default();
+    let scan_result =
+        scanner::scan_directory(&central_dir, &config, args.no_format, args.max_width);
+
+    let mut db = cache.lock().await;
+    for file in scan_result.files {
+        let rel_str = file.rel_path;
+
+        // Only insert Rust files into cache
+        if rel_str.ends_with(".rs") {
+            let body_hashes: Vec<String> = file.bodies.iter().map(|(h, _, _)| h.clone()).collect();
+            for (hash, meta, body) in file.bodies {
+                db.bodies
+                    .insert(hash, grab::cache::BodyEntry { meta, body });
+            }
+            db.files.insert(
+                rel_str.clone(),
+                grab::cache::FileEntry {
+                    loc: file.loc,
+                    byte_size: file.byte_size,
+                    body_hashes,
+                    code: file.code,
+                },
+            );
+            if let Some(segment) = file.skeleton_segment {
+                db.skeleton_segments.insert(rel_str.clone(), segment);
+            }
+            if !db.file_order.contains(&rel_str) {
+                db.file_order.push(rel_str);
+            }
+        }
+    }
+    db.generation += 1;
+    let _ = db.save();
+    drop(db);
+
+    println!(
+        "✅ Index complete: {} rust files, {} bodies (gen {})",
+        cache.lock().await.files.len(),
+        cache.lock().await.bodies.len(),
+        cache.lock().await.generation
+    );
+
+    // ── Start Daemon ──
+    let state = AppState {
+        cache: cache.clone(),
+        registry: registry.clone(),
+        config: Arc::new(config),
+        central_dir: central_dir.clone(),
+        daemon_port: args.port,
+        max_width: args.max_width,
+        no_format: args.no_format,
+    };
+
+    let app = axum::Router::new()
+        // Read routes
+        .route("/skeleton", get(routes_read::get_skeleton))
+        .route("/catalog", get(routes_read::get_catalog))
+        .route("/info/{hash}", get(routes_read::get_body_info))
+        .route("/file-info/{path}", get(routes_read::get_file_info))
+        .route("/file/{path}", get(routes_read::get_file))
+        .route("/{hash}", get(routes_read::get_body))
+        // Write/Sync routes
+        .route("/repos", get(routes_write::get_repos))
+        .route("/repos", post(routes_write::post_repo_add))
+        .route("/sync", post(routes_write::post_sync))
+        .with_state(state);
+
+    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
+    println!(" 🚀 Daemon on http://{}", addr);
+    println!("    GET  /skeleton          → compressed skeleton");
+    println!("    GET  /catalog           → all files, LOC, sizes");
+    println!("    GET  /info/<HASH>       → body metadata");
+    println!("    GET  /file/<path>       → full file code");
+    println!("    GET  /<HASH>            → body code");
+    println!("    POST /repos             → register repo");
+    println!("    GET  /repos             → list repos");
+    println!("    POST /sync              → sync & reindex");
+
+    if let Err(e) = axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app).await {
+        eprintln!("Daemon error: {}", e);
+    }
 }
