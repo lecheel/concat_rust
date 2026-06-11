@@ -15,7 +15,7 @@ pub fn build_response(status: StatusCode, headers: Vec<(&str, String)>, body: St
     for (key, value) in headers {
         if let Ok(name) = key.parse::<axum::http::header::HeaderName>() {
             if let Ok(val) = value.parse::<HeaderValue>() {
-                response.headers_mut().append(name, val);
+                response.headers_mut().insert(name, val); // ← was append
             }
         }
     }
@@ -210,7 +210,11 @@ pub async fn get_body_info(Path(prefix): Path<String>, State(state): State<AppSt
     }
 
     match serde_json::to_string_pretty(&infos) {
-        Ok(json) => build_response(StatusCode::OK, vec![], json),
+        Ok(json) => build_response(
+            StatusCode::OK,
+            vec![("content-type", "application/json".to_string())],
+            json,
+        ),
         Err(e) => build_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             vec![],
@@ -247,7 +251,11 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
             };
 
             return match serde_json::to_string_pretty(&resp) {
-                Ok(json) => build_response(StatusCode::OK, vec![], json),
+                Ok(json) => build_response(
+                    StatusCode::OK,
+                    vec![("content-type", "application/json".to_string())],
+                    json,
+                ),
                 Err(e) => build_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     vec![],
@@ -281,7 +289,11 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
                 source: "disk".to_string(),
             };
             match serde_json::to_string_pretty(&resp) {
-                Ok(json) => build_response(StatusCode::OK, vec![], json),
+                Ok(json) => build_response(
+                    StatusCode::OK,
+                    vec![("content-type", "application/json".to_string())],
+                    json,
+                ),
                 Err(e) => build_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     vec![],

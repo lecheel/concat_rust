@@ -113,8 +113,12 @@ pub async fn post_sync(State(state): State<AppState>) -> Response {
         state.max_width,
     );
 
+    // Track which files are currently on disk so we can evict stale cache entries
+    let mut found_rel_paths = std::collections::HashSet::new();
+
     for file in scan_result.files {
-        let rel_str = file.rel_path;
+        let rel_str = file.rel_path.clone();
+        found_rel_paths.insert(rel_str.clone());
 
         // Only insert Rust files into cache
         if rel_str.ends_with(".rs") {
@@ -141,6 +145,21 @@ pub async fn post_sync(State(state): State<AppState>) -> Response {
         }
     }
 
+    // Evict files from cache that no longer exist on disk
+    let stale_files: Vec<String> = db
+        .files
+        .keys()
+        .filter(|k| !found_rel_paths.contains(*k))
+        .cloned()
+        .collect();
+
+    for path in &stale_files {
+        db.evict_file(path);
+    }
+
+    // Clean up file_order from stale entries
+    db.file_order.retain(|p| found_rel_paths.contains(p));
+
     db.generation += 1;
     let _ = db.save();
 
@@ -148,8 +167,9 @@ pub async fn post_sync(State(state): State<AppState>) -> Response {
         StatusCode::OK,
         vec![],
         format!(
-            "Synced. {} files changed (gen {})",
+            "Synced. {} files changed, {} stale evicted (gen {})",
             changed.len(),
+            stale_files.len(),
             db.generation
         ),
     )

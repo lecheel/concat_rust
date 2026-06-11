@@ -85,38 +85,66 @@ fn base_url(cli: &Cli) -> String {
 }
 
 fn fetch_text(url: &str) -> Result<String, String> {
-    reqwest::blocking::get(url)
-        .map_err(|e| format!("Connection failed: {}", e))?
+    let resp = reqwest::blocking::get(url).map_err(|e| format!("Connection failed: {}", e))?;
+    let status = resp.status();
+    let body = resp
         .text()
-        .map_err(|e| format!("Failed to read body: {}", e))
+        .map_err(|e| format!("Failed to read body: {}", e))?;
+    if !status.is_success() {
+        Err(format!("HTTP {}: {}", status, body))
+    } else {
+        Ok(body)
+    }
 }
 
 fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
-    reqwest::blocking::get(url)
-        .map_err(|e| format!("Connection failed: {}", e))?
-        .json()
-        .map_err(|e| format!("Failed to parse JSON: {}", e))
+    let resp = reqwest::blocking::get(url).map_err(|e| format!("Connection failed: {}", e))?;
+    let status = resp.status();
+    let body = resp
+        .text()
+        .map_err(|e| format!("Failed to read body: {}", e))?;
+    if !status.is_success() {
+        return Err(format!("HTTP {}: {}", status, body));
+    }
+    serde_json::from_str(&body).map_err(|e| {
+        let preview = &body[..body.len().min(200)];
+        format!("Failed to parse JSON: {} (body: {})", e, preview)
+    })
 }
 
 fn post_text(url: &str) -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
-    client
+    let resp = client
         .post(url)
         .send()
-        .map_err(|e| format!("Connection failed: {}", e))?
+        .map_err(|e| format!("Connection failed: {}", e))?;
+    let status = resp.status();
+    let body = resp
         .text()
-        .map_err(|e| format!("Failed to read body: {}", e))
+        .map_err(|e| format!("Failed to read body: {}", e))?;
+    if !status.is_success() {
+        Err(format!("HTTP {}: {}", status, body))
+    } else {
+        Ok(body)
+    }
 }
 
 fn post_json(url: &str, body: &serde_json::Value) -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
-    client
+    let resp = client
         .post(url)
         .json(body)
         .send()
-        .map_err(|e| format!("Connection failed: {}", e))?
+        .map_err(|e| format!("Connection failed: {}", e))?;
+    let status = resp.status();
+    let resp_body = resp
         .text()
-        .map_err(|e| format!("Failed to read body: {}", e))
+        .map_err(|e| format!("Failed to read body: {}", e))?;
+    if !status.is_success() {
+        Err(format!("HTTP {}: {}", status, resp_body))
+    } else {
+        Ok(resp_body)
+    }
 }
 
 fn active_repo_path() -> std::path::PathBuf {

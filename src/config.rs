@@ -113,8 +113,14 @@ impl Default for ScanConfig {
                 "__pycache__".into(),
                 ".idea".into(),
                 ".vscode".into(),
+                ".concat_rust_central".into(),
             ],
-            skip_patterns: vec!["*.lock".into(), "*.min.js".into(), "*.min.css".into()],
+            skip_patterns: vec![
+                "*.lock".into(),
+                "*.min.js".into(),
+                "*.min.css".into(),
+                "concat_rust.cache*".into(),
+            ],
         }
     }
 }

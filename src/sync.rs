@@ -18,6 +18,7 @@ const SKIP_DIRS: &[&str] = &[
     ".idea",
     ".vscode",
     ".DS_Store",
+    ".concat_rust_central",
 ];
 
 const SKIP_EXTENSIONS: &[&str] = &[
@@ -117,6 +118,13 @@ fn walk_source_recursive(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     for entry in std::fs::read_dir(current)? {
         let path = entry?.path();
+
+        // Skip the daemon cache file
+        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+            if name.starts_with("concat_rust.cache") {
+                continue;
+            }
+        }
 
         if path.is_dir() {
             if let Some(name) = path.file_name().and_then(|n| n.to_str()) {

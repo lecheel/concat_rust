@@ -28,15 +28,7 @@ struct Args {
     #[arg(long, default_value_t = 7890)]
     port: u16,
 
-    /// Sync interval in seconds (0 = no periodic sync)
-    #[arg(long, default_value_t = 30)]
-    sync_interval: u64,
-
-    /// Skip initial sync on startup
-    #[arg(long)]
-    no_sync: bool,
-
-    /// Skip rustfmt
+    /// Skip rustfmt (use if indexing hangs)
     #[arg(long)]
     no_format: bool,
 
@@ -71,64 +63,58 @@ async fn main() {
     let registry = Arc::new(Mutex::new(registry));
     let cache = Arc::new(Mutex::new(cache));
 
-    // ── Initial Sync ──
-    if !args.no_sync {
-        println!("🔄 Initial sync...");
-        let changed =
-            grab::sync_runner::sync_all_repos(registry.clone(), central_dir.clone()).await;
-        println!("🔄 {} files changed", changed.len());
-    }
+    // ── Initial Index (only if central dir already has files) ──
+    let has_repos = !registry.lock().await.repos.is_empty();
 
-    // ── Initial Index ──
-    println!("🔍 Indexing central dir...");
-    let config = ScanConfig::default();
-    let scan_result =
-        scanner::scan_directory(&central_dir, &config, args.no_format, args.max_width);
+    if has_repos {
+        println!("🔄 Syncing registered repos...");
+        let _ = grab::sync_runner::sync_all_repos(registry.clone(), central_dir.clone()).await;
 
-    let mut db = cache.lock().await;
-    for file in scan_result.files {
-        let rel_str = file.rel_path;
+        println!("🔍 Indexing central dir...");
+        let config = ScanConfig::default();
+        let scan_result =
+            scanner::scan_directory(&central_dir, &config, args.no_format, args.max_width);
 
-        // Only insert Rust files into cache
-        if rel_str.ends_with(".rs") {
-            let body_hashes: Vec<String> = file.bodies.iter().map(|(h, _, _)| h.clone()).collect();
-            for (hash, meta, body) in file.bodies {
-                db.bodies
-                    .insert(hash, grab::cache::BodyEntry { meta, body });
-            }
-            db.files.insert(
-                rel_str.clone(),
-                grab::cache::FileEntry {
-                    loc: file.loc,
-                    byte_size: file.byte_size,
-                    body_hashes,
-                    code: file.code,
-                },
-            );
-            if let Some(segment) = file.skeleton_segment {
-                db.skeleton_segments.insert(rel_str.clone(), segment);
-            }
-            if !db.file_order.contains(&rel_str) {
-                db.file_order.push(rel_str);
+        let mut db = cache.lock().await;
+        for file in scan_result.files {
+            let rel_str = file.rel_path;
+            if rel_str.ends_with(".rs") {
+                let body_hashes: Vec<String> =
+                    file.bodies.iter().map(|(h, _, _)| h.clone()).collect();
+                for (hash, meta, body) in file.bodies {
+                    db.bodies
+                        .insert(hash, grab::cache::BodyEntry { meta, body });
+                }
+                db.files.insert(
+                    rel_str.clone(),
+                    grab::cache::FileEntry {
+                        loc: file.loc,
+                        byte_size: file.byte_size,
+                        body_hashes,
+                        code: file.code,
+                    },
+                );
+                if let Some(segment) = file.skeleton_segment {
+                    db.skeleton_segments.insert(rel_str.clone(), segment);
+                }
+                if !db.file_order.contains(&rel_str) {
+                    db.file_order.push(rel_str);
+                }
             }
         }
+        db.generation += 1;
+        let _ = db.save();
+        println!("✅ Index complete (gen {})", db.generation);
+    } else {
+        println!("ℹ️  No repos registered yet. Use the CLI to add one:");
+        println!("   cli add-repo <id> <path>");
     }
-    db.generation += 1;
-    let _ = db.save();
-    drop(db);
-
-    println!(
-        "✅ Index complete: {} rust files, {} bodies (gen {})",
-        cache.lock().await.files.len(),
-        cache.lock().await.bodies.len(),
-        cache.lock().await.generation
-    );
 
     // ── Start Daemon ──
     let state = AppState {
         cache: cache.clone(),
         registry: registry.clone(),
-        config: Arc::new(config),
+        config: Arc::new(ScanConfig::default()),
         central_dir: central_dir.clone(),
         daemon_port: args.port,
         max_width: args.max_width,
@@ -136,14 +122,12 @@ async fn main() {
     };
 
     let app = axum::Router::new()
-        // Read routes
         .route("/skeleton", get(routes_read::get_skeleton))
         .route("/catalog", get(routes_read::get_catalog))
-        .route("/info/{hash}", get(routes_read::get_body_info))
-        .route("/file-info/{path}", get(routes_read::get_file_info))
-        .route("/file/{path}", get(routes_read::get_file))
-        .route("/{hash}", get(routes_read::get_body))
-        // Write/Sync routes
+        .route("/info/:hash", get(routes_read::get_body_info)) // ← :hash
+        .route("/file-info/*path", get(routes_read::get_file_info))
+        .route("/file/*path", get(routes_read::get_file))
+        .route("/:hash", get(routes_read::get_body)) // ← :hash
         .route("/repos", get(routes_write::get_repos))
         .route("/repos", post(routes_write::post_repo_add))
         .route("/sync", post(routes_write::post_sync))
@@ -153,7 +137,6 @@ async fn main() {
     println!(" 🚀 Daemon on http://{}", addr);
     println!("    GET  /skeleton          → compressed skeleton");
     println!("    GET  /catalog           → all files, LOC, sizes");
-    println!("    GET  /info/<HASH>       → body metadata");
     println!("    GET  /file/<path>       → full file code");
     println!("    GET  /<HASH>            → body code");
     println!("    POST /repos             → register repo");
