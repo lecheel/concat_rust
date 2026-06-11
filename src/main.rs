@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use grab::cache::DaemonCache;
 use grab::config::ScanConfig;
 use grab::daemon::routes_read;
@@ -122,26 +122,30 @@ async fn main() {
     };
 
     let app = axum::Router::new()
+        // Read routes
         .route("/skeleton", get(routes_read::get_skeleton))
         .route("/catalog", get(routes_read::get_catalog))
-        .route("/info/:hash", get(routes_read::get_body_info)) // ← :hash
+        .route("/info/{hash}", get(routes_read::get_body_info))
         .route("/file-info/*path", get(routes_read::get_file_info))
         .route("/file/*path", get(routes_read::get_file))
-        .route("/:hash", get(routes_read::get_body)) // ← :hash
+        .route("/{hash}", get(routes_read::get_body))
+        // Write/Sync routes
         .route("/repos", get(routes_write::get_repos))
         .route("/repos", post(routes_write::post_repo_add))
+        .route("/repos/{id}", delete(routes_write::delete_repo))
         .route("/sync", post(routes_write::post_sync))
         .with_state(state);
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));
     println!(" 🚀 Daemon on http://{}", addr);
-    println!("    GET  /skeleton          → compressed skeleton");
-    println!("    GET  /catalog           → all files, LOC, sizes");
-    println!("    GET  /file/<path>       → full file code");
-    println!("    GET  /<HASH>            → body code");
-    println!("    POST /repos             → register repo");
-    println!("    GET  /repos             → list repos");
-    println!("    POST /sync              → sync & reindex");
+    println!("    GET    /skeleton          → compressed skeleton");
+    println!("    GET    /catalog           → all files, LOC, sizes");
+    println!("    GET    /file/<path>       → full file code");
+    println!("    GET    /<HASH>            → body code");
+    println!("    POST   /repos             → register repo");
+    println!("    GET    /repos             → list repos");
+    println!("    DELETE /repos/<id>        → remove repo");
+    println!("    POST   /sync              → sync & reindex");
 
     if let Err(e) = axum::serve(tokio::net::TcpListener::bind(addr).await.unwrap(), app).await {
         eprintln!("Daemon error: {}", e);

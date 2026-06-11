@@ -53,11 +53,10 @@ impl RepoRegistry {
         Ok(())
     }
 
-    /// Register a new repo.
+    /// Register a new repo, or update the source path of an existing one.
+    /// Returns true if this was a new registration.
     pub fn add_repo(&mut self, id: &str, source_path: PathBuf) -> bool {
-        if self.repos.contains_key(id) {
-            return false;
-        }
+        let is_new = !self.repos.contains_key(id);
         self.repos.insert(
             id.to_string(),
             RepoEntry {
@@ -69,7 +68,7 @@ impl RepoRegistry {
                 file_count: None,
             },
         );
-        true
+        is_new
     }
 
     /// Unregister a repo.

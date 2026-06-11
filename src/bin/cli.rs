@@ -79,6 +79,74 @@ enum Commands {
 }
 
 // ── Helpers ──────────────────────────────────────────────────
+// ── Path Resolution ─────────────────────────────────────────
+
+/// Root-level files that should NOT get auto src/ prefix
+const ROOT_LEVEL_FILES: &[&str] = &[
+    "Cargo.toml",
+    "Cargo.lock",
+    "docker-compose.yml",
+    "docker-compose.yaml",
+    "Dockerfile",
+    ".env",
+    ".env.example",
+    "Makefile",
+    "README.md",
+    "build.rs",
+];
+
+/// Determine if `src/` should be auto-prepended to the path.
+fn should_auto_prefix_src(path: &str) -> bool {
+    // Already has src/ as a component
+    if path.starts_with("src/") || path.contains("/src/") {
+        return false;
+    }
+
+    // Known root-level config files — never prefix
+    let filename = path.rsplit('/').next().unwrap_or(path);
+    if ROOT_LEVEL_FILES.contains(&filename) {
+        return false;
+    }
+
+    // Has subdirectories (e.g., daemon/mod.rs) — likely a src path
+    if path.contains('/') {
+        return true;
+    }
+
+    // Single .rs file (e.g., main.rs, lib.rs, sync.rs)
+    if path.ends_with(".rs") {
+        return true;
+    }
+
+    false
+}
+
+/// Resolve a user-provided path to a fully-qualified daemon path.
+///   daemon/mod.rs  +  repo=grab  →  grab/src/daemon/mod.rs
+///   sync.rs        +  repo=grab  →  grab/src/sync.rs
+///   Cargo.toml     +  repo=grab  →  grab/Cargo.toml
+///   src/main.rs    +  repo=grab  →  grab/src/main.rs
+///   grab/src/main.rs  +  no repo →  grab/src/main.rs
+fn resolve_path(input: &str, active_repo: Option<&str>) -> String {
+    // Step 1: Auto-prepend src/ for source-like paths
+    let with_src = if should_auto_prefix_src(input) {
+        format!("src/{}", input)
+    } else {
+        input.to_string()
+    };
+
+    // Step 2: Prepend active repo unless path already starts with it
+    if let Some(repo) = active_repo {
+        let repo_prefix = format!("{}/", repo);
+        if with_src.starts_with(&repo_prefix) {
+            with_src
+        } else {
+            format!("{}{}", repo_prefix, with_src)
+        }
+    } else {
+        with_src
+    }
+}
 
 fn base_url(cli: &Cli) -> String {
     format!("http://{}:{}", cli.host, cli.port)
@@ -285,9 +353,21 @@ fn cmd_add_repo(id: &str, source_path: &str, base: &str) {
     }
 }
 
-fn cmd_remove_repo(_id: &str, _base: &str) {
-    // Daemon doesn't have DELETE yet, we'll just log it for now or implement via future
-    eprintln!("⚠️ Remove repo via API not implemented yet. Remove manually from .registry.json");
+fn cmd_remove_repo(id: &str, base: &str) {
+    let client = reqwest::blocking::Client::new();
+    let url = format!("{}/repos/{}", base, id);
+    match client.delete(&url).send() {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().unwrap_or_default();
+            if status.is_success() {
+                println!("✅ {}", body);
+            } else {
+                eprintln!("❌ HTTP {}: {}", status, body);
+            }
+        }
+        Err(e) => eprintln!("❌ Connection failed: {}", e),
+    }
 }
 
 fn cmd_sync(_repo: Option<&str>, base: &str) {
@@ -363,14 +443,11 @@ fn cmd_file(paths: &[String], base: &str, warn_loc: usize) {
     let mut summaries = Vec::new();
 
     for p in paths {
-        // Resolve path
-        let resolved = if p.contains('/') {
-            p.to_string()
-        } else if let Some(ref repo) = active {
-            format!("{}/{}", repo, p)
-        } else {
-            p.to_string()
-        };
+        let resolved = resolve_path(p, active.as_deref());
+
+        if resolved != *p {
+            eprintln!("  → resolved: {}", resolved);
+        }
 
         let url = format!("{}/file/{}", base, resolved);
         match fetch_text(&url) {
@@ -391,48 +468,14 @@ fn cmd_file(paths: &[String], base: &str, warn_loc: usize) {
     }
 }
 
-fn cmd_hash(hashes: &[String], base: &str, warn_loc: usize) {
-    let hash_query = hashes.join("+");
-    let url = format!("{}/{}", base, hash_query);
-
-    match fetch_text(&url) {
-        Ok(body) => {
-            let loc = body.lines().count();
-            let mut found_files = std::collections::BTreeSet::new();
-            for line in body.lines() {
-                if let Some(path) = line.strip_prefix("//--+ file:///") {
-                    found_files.insert(path.to_string());
-                }
-            }
-
-            let files_str = if found_files.is_empty() {
-                "unknown".to_string()
-            } else {
-                found_files.into_iter().collect::<Vec<_>>().join(", ")
-            };
-
-            let summary = format!(
-                "Hashes: [{}] (Files: {}) [{} LOC]",
-                hashes.join(", "),
-                files_str,
-                loc
-            );
-
-            copy_to_clipboard(&body, warn_loc, &[summary]);
-        }
-        Err(e) => eprintln!("❌ {}", e),
-    }
-}
-
 fn cmd_info(target: &str, is_file: bool, base: &str) {
     if is_file {
-        let resolved = if target.contains('/') {
-            target.to_string()
-        } else if let Some(ref repo) = get_active_repo() {
-            format!("{}/{}", repo, target)
-        } else {
-            target.to_string()
-        };
+        let active = get_active_repo();
+        let resolved = resolve_path(target, active.as_deref());
+
+        if resolved != target {
+            eprintln!("  → resolved: {}", resolved);
+        }
 
         let url = format!("{}/file-info/{}", base, resolved);
         match fetch_json(&url) {
@@ -482,6 +525,39 @@ fn cmd_info(target: &str, is_file: bool, base: &str) {
             }
             Err(e) => eprintln!("❌ {}", e),
         }
+    }
+}
+
+fn cmd_hash(hashes: &[String], base: &str, warn_loc: usize) {
+    let hash_query = hashes.join("+");
+    let url = format!("{}/{}", base, hash_query);
+
+    match fetch_text(&url) {
+        Ok(body) => {
+            let loc = body.lines().count();
+            let mut found_files = std::collections::BTreeSet::new();
+            for line in body.lines() {
+                if let Some(path) = line.strip_prefix("//--+ file:///") {
+                    found_files.insert(path.to_string());
+                }
+            }
+
+            let files_str = if found_files.is_empty() {
+                "unknown".to_string()
+            } else {
+                found_files.into_iter().collect::<Vec<_>>().join(", ")
+            };
+
+            let summary = format!(
+                "Hashes: [{}] (Files: {}) [{} LOC]",
+                hashes.join(", "),
+                files_str,
+                loc
+            );
+
+            copy_to_clipboard(&body, warn_loc, &[summary]);
+        }
+        Err(e) => eprintln!("❌ {}", e),
     }
 }
 

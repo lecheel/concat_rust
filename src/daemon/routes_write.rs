@@ -1,6 +1,6 @@
-//--+ src/daemon/routes_write.rs
-
-use axum::{extract::State, http::StatusCode, response::Response};
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::Response;
 use serde::{Deserialize, Serialize};
 
 use super::state::AppState;
@@ -54,28 +54,35 @@ pub async fn get_repos(State(state): State<AppState>) -> Response {
     }
 }
 
-/// POST /repos
+/// POST /repos — register a new repo or update an existing one
 pub async fn post_repo_add(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<AddRepoRequest>,
 ) -> Response {
     let source = std::path::PathBuf::from(&req.source_path);
+
+    // Canonicalize to absolute path — resolves ".", "..", symlinks
+    let source = match source.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            return super::routes_read::build_response(
+                StatusCode::BAD_REQUEST,
+                vec![],
+                format!("Source path does not exist: {}", req.source_path),
+            );
+        }
+    };
+
     if !source.is_dir() {
         return super::routes_read::build_response(
             StatusCode::BAD_REQUEST,
             vec![],
-            format!("Source path does not exist: {}", req.source_path),
+            format!("Source path is not a directory: {}", req.source_path),
         );
     }
 
     let mut reg = state.registry.lock().await;
-    if !reg.add_repo(&req.id, source) {
-        return super::routes_read::build_response(
-            StatusCode::CONFLICT,
-            vec![],
-            format!("Repo '{}' already registered", req.id),
-        );
-    }
+    let is_new = reg.add_repo(&req.id, source.clone());
 
     if let Err(e) = reg.save() {
         return super::routes_read::build_response(
@@ -85,26 +92,13 @@ pub async fn post_repo_add(
         );
     }
 
-    super::routes_read::build_response(
-        StatusCode::CREATED,
-        vec![],
-        format!("Registered repo '{}' → {}", req.id, req.source_path),
-    )
-}
+    drop(reg); // Release lock before sync
 
-/// POST /sync
-pub async fn post_sync(State(state): State<AppState>) -> Response {
-    let changed =
-        sync_runner::sync_all_repos(state.registry.clone(), state.central_dir.clone()).await;
+    // Auto-sync so files are immediately available
+    let _ = sync_runner::sync_all_repos(state.registry.clone(), state.central_dir.clone()).await;
 
-    // Reindex changed files
+    // Reindex
     let mut db = state.cache.lock().await;
-
-    for path in &changed {
-        db.evict_file(path);
-    }
-
-    // Rescan the whole central dir to pick up changes cleanly
     let config = ScanConfig::default();
     let scan_result = scanner::scan_directory(
         &state.central_dir,
@@ -113,14 +107,11 @@ pub async fn post_sync(State(state): State<AppState>) -> Response {
         state.max_width,
     );
 
-    // Track which files are currently on disk so we can evict stale cache entries
     let mut found_rel_paths = std::collections::HashSet::new();
-
     for file in scan_result.files {
         let rel_str = file.rel_path.clone();
         found_rel_paths.insert(rel_str.clone());
 
-        // Only insert Rust files into cache
         if rel_str.ends_with(".rs") {
             let body_hashes: Vec<String> = file.bodies.iter().map(|(h, _, _)| h.clone()).collect();
             for (hash, meta, body) in file.bodies {
@@ -145,19 +136,117 @@ pub async fn post_sync(State(state): State<AppState>) -> Response {
         }
     }
 
-    // Evict files from cache that no longer exist on disk
+    // Evict stale entries
     let stale_files: Vec<String> = db
         .files
         .keys()
         .filter(|k| !found_rel_paths.contains(*k))
         .cloned()
         .collect();
-
     for path in &stale_files {
         db.evict_file(path);
     }
+    db.file_order.retain(|p| found_rel_paths.contains(p));
+    db.generation += 1;
+    let _ = db.save();
 
-    // Clean up file_order from stale entries
+    let verb = if is_new { "Registered" } else { "Updated" };
+    super::routes_read::build_response(
+        StatusCode::OK,
+        vec![],
+        format!(
+            "✅ {} & synced '{}' → {} ({} files)",
+            verb,
+            req.id,
+            source.display(),
+            found_rel_paths.len()
+        ),
+    )
+}
+
+/// DELETE /repos/:id
+pub async fn delete_repo(Path(id): Path<String>, State(state): State<AppState>) -> Response {
+    let mut reg = state.registry.lock().await;
+
+    if !reg.repos.contains_key(&id) {
+        return super::routes_read::build_response(
+            StatusCode::NOT_FOUND,
+            vec![],
+            format!("Repo '{}' not found", id),
+        );
+    }
+
+    reg.remove_repo(&id);
+
+    if let Err(e) = reg.save() {
+        return super::routes_read::build_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            vec![],
+            format!("Failed to save registry: {}", e),
+        );
+    }
+
+    super::routes_read::build_response(StatusCode::OK, vec![], format!("Removed repo '{}'", id))
+}
+
+/// POST /sync
+pub async fn post_sync(State(state): State<AppState>) -> Response {
+    let changed =
+        sync_runner::sync_all_repos(state.registry.clone(), state.central_dir.clone()).await;
+
+    let mut db = state.cache.lock().await;
+
+    for path in &changed {
+        db.evict_file(path);
+    }
+
+    let config = ScanConfig::default();
+    let scan_result = scanner::scan_directory(
+        &state.central_dir,
+        &config,
+        state.no_format,
+        state.max_width,
+    );
+
+    let mut found_rel_paths = std::collections::HashSet::new();
+
+    for file in scan_result.files {
+        let rel_str = file.rel_path.clone();
+        found_rel_paths.insert(rel_str.clone());
+
+        if rel_str.ends_with(".rs") {
+            let body_hashes: Vec<String> = file.bodies.iter().map(|(h, _, _)| h.clone()).collect();
+            for (hash, meta, body) in file.bodies {
+                db.bodies
+                    .insert(hash, crate::cache::BodyEntry { meta, body });
+            }
+            db.files.insert(
+                rel_str.clone(),
+                crate::cache::FileEntry {
+                    loc: file.loc,
+                    byte_size: file.byte_size,
+                    body_hashes,
+                    code: file.code,
+                },
+            );
+            if let Some(segment) = file.skeleton_segment {
+                db.skeleton_segments.insert(rel_str.clone(), segment);
+            }
+            if !db.file_order.contains(&rel_str) {
+                db.file_order.push(rel_str);
+            }
+        }
+    }
+
+    let stale_files: Vec<String> = db
+        .files
+        .keys()
+        .filter(|k| !found_rel_paths.contains(*k))
+        .cloned()
+        .collect();
+    for path in &stale_files {
+        db.evict_file(path);
+    }
     db.file_order.retain(|p| found_rel_paths.contains(p));
 
     db.generation += 1;
@@ -167,7 +256,7 @@ pub async fn post_sync(State(state): State<AppState>) -> Response {
         StatusCode::OK,
         vec![],
         format!(
-            "Synced. {} files changed, {} stale evicted (gen {})",
+            "Synced. {} changed, {} stale evicted (gen {})",
             changed.len(),
             stale_files.len(),
             db.generation
