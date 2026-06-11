@@ -20,5 +20,5 @@ serde_json = "1"
 uncomment = "3.0.3"
 syn = { version = "2", features = ["full", "visit"] }
 quote = "1"
-proc-macro2 = "1"
+proc-macro2 = { version = "1", features = ["span-locations"] }
 tempfile = "3"
