@@ -1,16 +1,16 @@
 document.addEventListener('DOMContentLoaded', () => {
-// ── Dynamic Header Title ──
-function updateHeaderTitle() {
-  const activeRepoInput = document.getElementById('activeRepo');
-  const headerTitle = document.getElementById('headerTitle');
-  if (!headerTitle) return;
-  
-  const repo = activeRepoInput ? activeRepoInput.value.trim() : '';
-  headerTitle.textContent = repo 
-    ? `Concat Rust Paster (repo ${repo})` 
-    : 'Concat Rust Paster';
-}    
-   
+  // ── Dynamic Header Title ──
+  function updateHeaderTitle() {
+    const activeRepoInput = document.getElementById('activeRepo');
+    const headerTitle = document.getElementById('headerTitle');
+    if (!headerTitle) return;
+
+    const repo = activeRepoInput ? activeRepoInput.value.trim() : '';
+    headerTitle.textContent = repo
+      ? `Concat Rust Paster (${repo})`
+      : 'Concat Rust Paster';
+  }
+
   // ── Skeleton toggle ──
   let skeletonChecked = false;
   const skeletonRow = document.getElementById('skeletonRow');
@@ -59,7 +59,6 @@ function updateHeaderTitle() {
     });
   }
 
-
   // ── Restore saved host/port/repo ──
   const hostInput = document.getElementById('host');
   const portInput = document.getElementById('port');
@@ -69,8 +68,6 @@ function updateHeaderTitle() {
     if (result.host && hostInput) hostInput.value = result.host;
     if (result.port && portInput) portInput.value = result.port;
     if (result.activeRepo && activeRepoInput) activeRepoInput.value = result.activeRepo;
-    
-    // Update header title with restored repo
     updateHeaderTitle();
   });
 
@@ -167,16 +164,27 @@ function shouldAutoPrefixSrc(path) {
   return false;
 }
 
+/**
+ * Detects if a path already starts with a repo-id prefix (e.g., "grab/src/main.rs").
+ * A repo prefix is a first path component that has no dot (not a filename) and isn't "src".
+ */
+function hasRepoPrefix(path) {
+  const slashPos = path.indexOf('/');
+  if (slashPos === -1) return false;
+  const first = path.substring(0, slashPos);
+  return !first.includes('.') && first !== 'src';
+}
+
 function resolvePath(input, activeRepo) {
   let withSrc = shouldAutoPrefixSrc(input) ? `src/${input}` : input;
-  
+
   if (activeRepo) {
     const repoPrefix = `${activeRepo}/`;
-    if (withSrc.startsWith(repoPrefix)) {
+    // If path already starts with the active repo prefix, or has any other repo prefix, use as-is
+    if (withSrc.startsWith(repoPrefix) || hasRepoPrefix(withSrc)) {
       return withSrc;
-    } else {
-      return `${repoPrefix}${withSrc}`;
     }
+    return `${repoPrefix}${withSrc}`;
   }
   return withSrc;
 }
@@ -222,10 +230,10 @@ async function doFetch() {
   } else {
     const hashes = hashesText.split(/[\r\n\s,]+/).map(h => h.trim()).filter(Boolean);
     const rawFiles = filesText.split(/[\s,]+/).map(f => f.trim()).filter(Boolean);
-    
-    // V2: Resolve file paths with active repo
+
+    // Resolve file paths with active repo (adds repo prefix for daemon lookup)
     const resolvedFiles = rawFiles.map(f => resolvePath(f, activeRepo));
-    
+
     if (hashes.length === 0 && resolvedFiles.length === 0) {
       setStatus('error', 'Add at least one hash, file path, or enable skeleton.');
       return;
@@ -275,7 +283,7 @@ function parseCommandLine(line) {
 
   let startIndex = 0;
   const firstToken = tokens[0].toLowerCase();
-  
+
   // Skip binary execution prefix
   if (firstToken === 'cli' || firstToken === 'concat-cli' || firstToken.endsWith('cli') || firstToken === 'cargo') {
     startIndex = 1;
@@ -302,21 +310,18 @@ function parseCommandLine(line) {
     } else if (token === '--skeleton' || token === '-s' || token.toLowerCase() === 'skeleton') {
       skeleton = true;
     } else if (token === '--repo' || token === '-r' || token.toLowerCase() === 'use' || token.toLowerCase() === 'repo') {
-      // Extract repo name (e.g., 'cli use grab' or 'cli --repo grab')
       if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) {
         repo = tokens[++i].replace(/['"]/g, '');
       }
     } else if (token.startsWith('-')) {
       parsingFiles = false;
       if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) {
-        i++; 
+        i++;
       }
     } else {
-      // Split by comma first, then clean each part individually
       const parts = token.split(',').map(p => p.replace(/['"]/g, '').trim()).filter(Boolean);
       for (const cleanToken of parts) {
         if (cleanToken) {
-          // Heuristic: if it contains a dot or slash, treat as a file
           if (parsingFiles || cleanToken.includes('.') || cleanToken.includes('/')) {
             files.push(cleanToken);
           } else {

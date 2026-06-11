@@ -76,6 +76,11 @@
     .addr-row input[type="number"] { width: 70px; }
     .addr-sep { color: #bbb; flex-shrink: 0; font-weight: 600; }
 
+    /* ── Repo row ── */
+    .repo-row { display: flex; align-items: center; gap: 5px; }
+    .repo-row input[type="text"] { flex: 1; min-width: 0; }
+    .repo-hint { font-size: 10px; color: #aaa; }
+
     /* ── Skeleton toggle ── */
     .toggle-row {
       display: flex; align-items: center; gap: 9px;
@@ -181,10 +186,9 @@
       <span class="label">⚡ Quick CLI Parser</span>
       <button class="btn-clear" id="clearQuickCommand">✕ clear</button>
     </div>
-    <input type="text" id="quickCommand" placeholder="cli --file src/main.rs OR cli a1b2c3d4..." spellcheck="false">
+    <input type="text" id="quickCommand" placeholder="cli use grab file lib.rs main.rs OR cli a1b2c3d4..." spellcheck="false">
     <span class="field-hint">Paste your command line here to extract files/hashes automatically</span>
   </div>
-  
 
   <div class="divider"></div>
 
@@ -205,7 +209,7 @@
       <button class="btn-clear" id="clearFiles">✕ clear</button>
     </div>
     <input type="text" id="files" placeholder="src/main.rs, src/lib.rs" spellcheck="false">
-    <span class="field-hint">Comma or space separated</span>
+    <span class="field-hint">Comma or space separated — use paths as shown in skeleton (e.g. src/main.rs)</span>
   </div>
 
   <div class="divider"></div>
@@ -220,6 +224,15 @@
         <div class="toggle-sub">Returns full daemon output — ignores hashes &amp; files</div>
       </div>
     </label>
+  </div>
+
+  <!-- Active repo -->
+  <div class="section">
+    <span class="label">📦 Active repo</span>
+    <div class="repo-row">
+      <input type="text" id="activeRepo" placeholder="e.g. grab (leave empty if single repo)" spellcheck="false">
+    </div>
+    <span class="repo-hint">Sets repo prefix for file lookups — type <code>cli use &lt;id&gt;</code> in quick parser above</span>
   </div>
 
   <!-- Daemon address -->
