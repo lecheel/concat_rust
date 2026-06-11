@@ -1,146 +1,479 @@
+//--+ src/bin/cli.rs
+
 use arboard::Clipboard;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
-/// CLI to retrieve compressed code bodies from the concat_rust daemon
 #[derive(Parser, Debug)]
-#[command(
-    name = "concat_rust_cli",
-    about = "Retrieve code bodies by hash or whole files by path, copy to clipboard"
-)]
-struct Args {
-    /// The hash(es) of the code bodies to retrieve (supports multiple in a row)
-    #[arg(group = "target")]
-    hashes: Vec<String>,
+#[command(name = "concat_rust_cli", about = "CLI for the concat_rust daemon")]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
 
-    /// The file path(s) to retrieve entirely (supports multiple, e.g., --file src/main.rs src/utils.rs)
-    #[arg(long, group = "target", num_args(1..))]
-    file: Option<Vec<String>>,
-
-    /// Retrieve the full skeleton (the compressed output file) from the daemon
-    #[arg(short, long, group = "target")]
-    skeleton: bool,
-
-    /// The host address of the daemon
-    #[arg(long, default_value = "127.0.0.1")]
+    /// Daemon host
+    #[arg(long, default_value = "127.0.0.1", global = true)]
     host: String,
 
-    /// The port of the daemon
-    #[arg(long, default_value_t = 7890)]
+    /// Daemon port
+    #[arg(long, default_value_t = 7890, global = true)]
     port: u16,
+
+    /// Warn if total LOC exceeds this threshold
+    #[arg(long, default_value_t = 2000, global = true)]
+    warn_loc: usize,
 }
 
-fn fetch_url(url: &str) -> Result<String, String> {
-    match reqwest::blocking::get(url) {
-        Ok(resp) => {
-            if resp.status().is_success() {
-                resp.text()
-                    .map_err(|e| format!("Failed to read body: {}", e))
-            } else {
-                Err(format!("Server returned HTTP {}", resp.status()))
-            }
-        }
-        Err(e) => Err(format!(
-            "Failed to connect to daemon at {} (Is it running?)\nError: {}",
-            url, e
-        )),
-    }
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Set active repo (or 'none')
+    Use { repo_id: String },
+
+    /// Show active repo
+    Active,
+
+    /// List registered repos
+    Repos,
+
+    /// Register a new repo
+    AddRepo { id: String, source_path: String },
+
+    /// Remove a repo
+    RemoveRepo { id: String },
+
+    /// Trigger sync (all or specific repo)
+    Sync {
+        /// Specific repo ID (syncs all if omitted)
+        repo: Option<String>,
+    },
+
+    /// Show catalog of all files and LOC
+    Catalog {
+        #[arg(long)]
+        repo: Option<String>,
+    },
+
+    /// Fetch skeleton to clipboard
+    Skeleton {
+        #[arg(long)]
+        repo: Option<String>,
+    },
+
+    /// Fetch whole file(s) by path
+    File {
+        /// File paths (e.g., core/src/main.rs api/docker-compose.yml)
+        paths: Vec<String>,
+    },
+
+    /// Fetch body(ies) by hash
+    Hash {
+        /// Hash values
+        hashes: Vec<String>,
+    },
+
+    /// Show LOC metadata without downloading
+    Info {
+        target: String,
+        /// Target is a file path, not a hash
+        #[arg(long)]
+        file: bool,
+    },
 }
 
-fn main() {
-    let args = Args::parse();
-    let mut clipboard_content = String::new();
-    let mut summaries = Vec::new();
+// ── Helpers ──────────────────────────────────────────────────
 
-    // Handle skeleton request
-    if args.skeleton {
-        let url = format!("http://{}:{}/skeleton", args.host, args.port);
-        match fetch_url(&url) {
-            Ok(body) => {
-                clipboard_content = body;
-                summaries.push("SKELETON (full skeleton output)".to_string());
-            }
-            Err(e) => {
-                eprintln!("Error retrieving skeleton: {}", e);
-                std::process::exit(1);
-            }
+fn base_url(cli: &Cli) -> String {
+    format!("http://{}:{}", cli.host, cli.port)
+}
+
+fn fetch_text(url: &str) -> Result<String, String> {
+    reqwest::blocking::get(url)
+        .map_err(|e| format!("Connection failed: {}", e))?
+        .text()
+        .map_err(|e| format!("Failed to read body: {}", e))
+}
+
+fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
+    reqwest::blocking::get(url)
+        .map_err(|e| format!("Connection failed: {}", e))?
+        .json()
+        .map_err(|e| format!("Failed to parse JSON: {}", e))
+}
+
+fn post_text(url: &str) -> Result<String, String> {
+    let client = reqwest::blocking::Client::new();
+    client
+        .post(url)
+        .send()
+        .map_err(|e| format!("Connection failed: {}", e))?
+        .text()
+        .map_err(|e| format!("Failed to read body: {}", e))
+}
+
+fn post_json(url: &str, body: &serde_json::Value) -> Result<String, String> {
+    let client = reqwest::blocking::Client::new();
+    client
+        .post(url)
+        .json(body)
+        .send()
+        .map_err(|e| format!("Connection failed: {}", e))?
+        .text()
+        .map_err(|e| format!("Failed to read body: {}", e))
+}
+
+fn active_repo_path() -> std::path::PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    let dir = std::path::PathBuf::from(home).join(".concat_rust");
+    let _ = std::fs::create_dir_all(&dir);
+    dir.join("active")
+}
+
+fn get_active_repo() -> Option<String> {
+    std::fs::read_to_string(active_repo_path())
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty() && s != "none")
+}
+
+fn set_active_repo(repo: &str) {
+    let _ = std::fs::write(active_repo_path(), repo);
+}
+
+fn copy_to_clipboard(content: &str, warn_loc: usize, summaries: &[String]) {
+    let total_loc = content.lines().count();
+
+    if total_loc > warn_loc {
+        eprintln!(
+            "⚠️  WARNING: About to copy {} LOC (threshold: {})",
+            total_loc, warn_loc
+        );
+        for s in summaries {
+            eprintln!("  - {}", s);
         }
-    } else if let Some(files) = args.file {
-        // Handle whole file request(s)
-        for filepath in files {
-            let url = format!("http://{}:{}/file/{}", args.host, args.port, filepath);
-            match fetch_url(&url) {
-                Ok(body) => {
-                    if !clipboard_content.is_empty() {
-                        clipboard_content.push_str("\n\n");
-                    }
-                    clipboard_content.push_str(&body);
-                    summaries.push(format!("File: {}", filepath));
-                }
-                Err(e) => {
-                    eprintln!("Error retrieving file {}: {}", filepath, e);
-                }
-            }
-        }
-    } else if !args.hashes.is_empty() {
-        // Handle hash(es) request by combining them using the '+' delimiter for a single request
-        let hash_query = args.hashes.join("+");
-        let url = format!("http://{}:{}/{}", args.host, args.port, hash_query);
-        match fetch_url(&url) {
-            Ok(body) => {
-                // Find all unique filenames from the return payload (looking for //--+ file:///<path>)
-                let mut found_files = std::collections::BTreeSet::new();
-                for line in body.lines() {
-                    if let Some(path) = line.strip_prefix("//--+ file:///") {
-                        found_files.insert(path.to_string());
-                    }
-                }
-
-                let files_str = if found_files.is_empty() {
-                    "unknown".to_string()
-                } else {
-                    found_files.into_iter().collect::<Vec<_>>().join(", ")
-                };
-
-                summaries.push(format!(
-                    "Hashes: [{}] (Files: {})",
-                    args.hashes.join(", "),
-                    files_str
-                ));
-
-                clipboard_content = body;
-            }
-            Err(e) => {
-                eprintln!(
-                    "Error retrieving hashes [{}]: {}",
-                    args.hashes.join(", "),
-                    e
-                );
-                std::process::exit(1);
-            }
-        }
-    } else {
-        eprintln!("No fetch targets provided. Please specify one or more hashes, --file <path>, or --skeleton.");
-        std::process::exit(1);
+        eprintln!("  Waiting 3s... (Ctrl+C to abort)");
+        std::thread::sleep(std::time::Duration::from_secs(3));
     }
 
-    if clipboard_content.is_empty() {
-        eprintln!("No content retrieved.");
-        std::process::exit(1);
-    }
-
-    // Try to copy to clipboard
-    match Clipboard::new().and_then(|mut cb| cb.set_text(&clipboard_content)) {
+    match Clipboard::new().and_then(|mut cb| cb.set_text(content)) {
         Ok(_) => {
-            println!("✅ Copied to clipboard:");
-            for s in &summaries {
+            println!("✅ Copied {} LOC to clipboard:", total_loc);
+            for s in summaries {
                 println!("  - {}", s);
             }
         }
         Err(e) => {
-            // Fallback: if clipboard fails (e.g., no X11/Wayland display), print to stdout
-            eprintln!("⚠️ Could not copy to clipboard: {}", e);
-            eprintln!("Printing to stdout instead:\n");
-            println!("{}", clipboard_content);
+            eprintln!("⚠️  Clipboard failed: {}. Printing to stdout:\n", e);
+            println!("{}", content);
         }
+    }
+}
+
+// ── Command Implementations ──────────────────────────────────
+
+fn cmd_use(repo_id: &str, base: &str) {
+    if repo_id == "none" {
+        set_active_repo("none");
+        println!("Cleared active repo. Paths must be fully qualified.");
+        return;
+    }
+
+    // Verify repo exists on daemon
+    let repos = match fetch_json(&format!("{}/repos", base)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("❌ Failed to fetch repos: {}", e);
+            return;
+        }
+    };
+
+    if let Some(arr) = repos.as_array() {
+        if arr.iter().any(|r| r["id"].as_str() == Some(repo_id)) {
+            set_active_repo(repo_id);
+            println!("Active repo: {}", repo_id);
+            println!(
+                "  Paths like 'src/main.rs' will resolve to '{}/src/main.rs'",
+                repo_id
+            );
+        } else {
+            eprintln!("❌ Unknown repo '{}'. Available:", repo_id);
+            for r in arr {
+                if let Some(id) = r["id"].as_str() {
+                    eprintln!("  {}", id);
+                }
+            }
+        }
+    }
+}
+
+fn cmd_active() {
+    match get_active_repo() {
+        Some(repo) => println!("Active repo: {}", repo),
+        None => println!("No active repo set. Paths must be fully qualified (repo/path)."),
+    }
+}
+
+fn cmd_repos(base: &str) {
+    let repos = match fetch_json(&format!("{}/repos", base)) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("❌ {}", e);
+            return;
+        }
+    };
+
+    if let Some(arr) = repos.as_array() {
+        if arr.is_empty() {
+            println!("No repos registered. Use: cli add-repo <id> <path>");
+            return;
+        }
+        println!("📋 Registered Repos:");
+        println!("{}", "─".repeat(60));
+        for r in arr {
+            let id = r["id"].as_str().unwrap_or("?");
+            let path = r["source_path"].as_str().unwrap_or("?");
+            let branch = r["git_branch"].as_str().unwrap_or("detached");
+            let files = r["file_count"].as_u64().unwrap_or(0);
+            let active = if let Some(ar) = get_active_repo() {
+                if ar == id {
+                    "🟢"
+                } else {
+                    "⚪"
+                }
+            } else {
+                "⚪"
+            };
+
+            println!(
+                "{} {:10} {:30} [{}] ({} files)",
+                active, id, path, branch, files
+            );
+        }
+    }
+}
+
+fn cmd_add_repo(id: &str, source_path: &str, base: &str) {
+    let body = serde_json::json!({ "id": id, "source_path": source_path });
+    match post_json(&format!("{}/repos", base), &body) {
+        Ok(msg) => println!("✅ {}", msg),
+        Err(e) => eprintln!("❌ {}", e),
+    }
+}
+
+fn cmd_remove_repo(_id: &str, _base: &str) {
+    // Daemon doesn't have DELETE yet, we'll just log it for now or implement via future
+    eprintln!("⚠️ Remove repo via API not implemented yet. Remove manually from .registry.json");
+}
+
+fn cmd_sync(_repo: Option<&str>, base: &str) {
+    let url = format!("{}/sync", base);
+    match post_text(&url) {
+        Ok(msg) => println!("🔄 {}", msg),
+        Err(e) => eprintln!("❌ {}", e),
+    }
+}
+
+fn cmd_catalog(_repo: Option<&str>, base: &str) {
+    let url = format!("{}/catalog", base);
+    match fetch_json(&url) {
+        Ok(cat) => {
+            let files = cat["files"].as_array().cloned().unwrap_or_default();
+            let total_loc = cat["total_loc"].as_u64().unwrap_or(0);
+            let total_bodies = cat["total_bodies"].as_u64().unwrap_or(0);
+
+            println!("📊 Catalog ({} LOC, {} bodies)", total_loc, total_bodies);
+            println!("{}", "─".repeat(60));
+
+            for f in &files {
+                let fp = f["filepath"].as_str().unwrap_or("?");
+                let loc = f["loc"].as_u64().unwrap_or(0);
+                let num_bodies = f["num_bodies"].as_u64().unwrap_or(0);
+
+                let icon = if loc > 2000 {
+                    "🔴"
+                } else if loc > 500 {
+                    "🟡"
+                } else {
+                    "🟢"
+                };
+
+                println!(
+                    "{} {:45} {:>5} LOC  {:>3} bodies",
+                    icon, fp, loc, num_bodies
+                );
+
+                if let Some(top) = f["top_hashes"].as_array() {
+                    for t in top.iter().take(3) {
+                        let h = t["hash"].as_str().unwrap_or("?");
+                        let l = t["loc"].as_u64().unwrap_or(0);
+                        if l > 50 {
+                            println!("     └─ {} [{} LOC]", h, l);
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => eprintln!("❌ {}", e),
+    }
+}
+
+fn cmd_skeleton(repo: Option<&str>, base: &str, warn_loc: usize) {
+    let mut url = format!("{}/skeleton", base);
+    if let Some(r) = repo {
+        url = format!("{}?repo={}", url, r);
+    }
+
+    match fetch_text(&url) {
+        Ok(body) => {
+            let loc = body.lines().count();
+            copy_to_clipboard(&body, warn_loc, &[format!("SKELETON [{} LOC]", loc)]);
+        }
+        Err(e) => eprintln!("❌ {}", e),
+    }
+}
+
+fn cmd_file(paths: &[String], base: &str, warn_loc: usize) {
+    let active = get_active_repo();
+    let mut full_content = String::new();
+    let mut summaries = Vec::new();
+
+    for p in paths {
+        // Resolve path
+        let resolved = if p.contains('/') {
+            p.to_string()
+        } else if let Some(ref repo) = active {
+            format!("{}/{}", repo, p)
+        } else {
+            p.to_string()
+        };
+
+        let url = format!("{}/file/{}", base, resolved);
+        match fetch_text(&url) {
+            Ok(body) => {
+                let loc = body.lines().count();
+                if !full_content.is_empty() {
+                    full_content.push_str("\n\n");
+                }
+                full_content.push_str(&body);
+                summaries.push(format!("File: {} [{} LOC]", resolved, loc));
+            }
+            Err(e) => eprintln!("❌ {}: {}", resolved, e),
+        }
+    }
+
+    if !full_content.is_empty() {
+        copy_to_clipboard(&full_content, warn_loc, &summaries);
+    }
+}
+
+fn cmd_hash(hashes: &[String], base: &str, warn_loc: usize) {
+    let hash_query = hashes.join("+");
+    let url = format!("{}/{}", base, hash_query);
+
+    match fetch_text(&url) {
+        Ok(body) => {
+            let loc = body.lines().count();
+            let mut found_files = std::collections::BTreeSet::new();
+            for line in body.lines() {
+                if let Some(path) = line.strip_prefix("//--+ file:///") {
+                    found_files.insert(path.to_string());
+                }
+            }
+
+            let files_str = if found_files.is_empty() {
+                "unknown".to_string()
+            } else {
+                found_files.into_iter().collect::<Vec<_>>().join(", ")
+            };
+
+            let summary = format!(
+                "Hashes: [{}] (Files: {}) [{} LOC]",
+                hashes.join(", "),
+                files_str,
+                loc
+            );
+
+            copy_to_clipboard(&body, warn_loc, &[summary]);
+        }
+        Err(e) => eprintln!("❌ {}", e),
+    }
+}
+
+fn cmd_info(target: &str, is_file: bool, base: &str) {
+    if is_file {
+        let resolved = if target.contains('/') {
+            target.to_string()
+        } else if let Some(ref repo) = get_active_repo() {
+            format!("{}/{}", repo, target)
+        } else {
+            target.to_string()
+        };
+
+        let url = format!("{}/file-info/{}", base, resolved);
+        match fetch_json(&url) {
+            Ok(info) => {
+                let fp = info["filepath"].as_str().unwrap_or("?");
+                let loc = info["loc"].as_u64().unwrap_or(0);
+                let byte_size = info["byte_size"].as_u64().unwrap_or(0);
+                let source = info["source"].as_str().unwrap_or("?");
+
+                let icon = if loc > 2000 {
+                    "🔴"
+                } else if loc > 500 {
+                    "🟡"
+                } else {
+                    "🟢"
+                };
+                println!(
+                    "{} {} [{} LOC | {} bytes | src: {}]",
+                    icon, fp, loc, byte_size, source
+                );
+            }
+            Err(e) => eprintln!("❌ {}", e),
+        }
+    } else {
+        let url = format!("{}/info/{}", base, target);
+        match fetch_json(&url) {
+            Ok(info) => {
+                if let Some(arr) = info.as_array() {
+                    for i in arr {
+                        let h = i["hash"].as_str().unwrap_or("?");
+                        let l = i["loc"].as_u64().unwrap_or(0);
+                        let b = i["byte_size"].as_u64().unwrap_or(0);
+                        let f = i["filepath"].as_str().unwrap_or("?");
+
+                        let warning = if l > 500 {
+                            " 🔴 LARGE"
+                        } else if l > 100 {
+                            " 🟡 MEDIUM"
+                        } else {
+                            " 🟢 small"
+                        };
+                        println!("  {} {} LOC ({} bytes) {} [{}]", h, l, b, warning, f);
+                    }
+                } else {
+                    println!("{}", info);
+                }
+            }
+            Err(e) => eprintln!("❌ {}", e),
+        }
+    }
+}
+
+// ── Main ─────────────────────────────────────────────────────
+
+fn main() {
+    let cli = Cli::parse();
+    let base = base_url(&cli);
+
+    match cli.command {
+        Commands::Use { repo_id } => cmd_use(&repo_id, &base),
+        Commands::Active => cmd_active(),
+        Commands::Repos => cmd_repos(&base),
+        Commands::AddRepo { id, source_path } => cmd_add_repo(&id, &source_path, &base),
+        Commands::RemoveRepo { id } => cmd_remove_repo(&id, &base),
+        Commands::Sync { repo } => cmd_sync(repo.as_deref(), &base),
+        Commands::Catalog { repo } => cmd_catalog(repo.as_deref(), &base),
+        Commands::Skeleton { repo } => cmd_skeleton(repo.as_deref(), &base, cli.warn_loc),
+        Commands::File { paths } => cmd_file(&paths, &base, cli.warn_loc),
+        Commands::Hash { hashes } => cmd_hash(&hashes, &base, cli.warn_loc),
+        Commands::Info { target, file } => cmd_info(&target, file, &base),
     }
 }
