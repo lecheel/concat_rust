@@ -131,11 +131,7 @@ impl DaemonCache {
              // Catalog:        http://localhost:{}/catalog\n\
              // Body info:      http://localhost:{}/info/<HASH>\n\
              // File info:      http://localhost:{}/file-info/<PATH>\n\
-             // Write file:     PUT http://localhost:{}/file/<PATH>\n\
-             // Sync:           POST http://localhost:{}/sync\n\
              // ===================================\n\n",
-            daemon_port,
-            daemon_port,
             daemon_port,
             daemon_port,
             daemon_port,
@@ -152,7 +148,30 @@ impl DaemonCache {
         };
 
         let skeleton = self.assemble_skeleton_for_repos(repo_filter);
-        format!("{}{}{}", header, skeleton, self.meta_prompt)
+
+        let meta_prompt = format!(
+            "\n\n===\n\
+             Your process:\n\
+             Analyze the feature requirements and determine which files, structs, traits, \
+             and functions you need to see the full implementation of.\n\
+             Prefer asking for whole files rather than individual hashes.\n\
+             If a file is too large, ask for specific impl blocks or struct definitions by their HASH.\n\
+             List exactly what you need in a clear, numbered list. For each item, include:\n\
+             - The file path (e.g., grab/src/main.rs).\n\
+             - If you need a specific block, include its HASH (e.g., /* HASH:1a12fb93 [183 LOC] */).\n\
+             - A brief reason (e.g., “to know the fields of AppState”, “to see how sync is implemented”).\n\
+             \n\
+             CLI commands (use these to fetch code):\n\
+             cli --skeleton          → full skeleton\n\
+             cli path.rs other.rs    → fetch whole files without the prefix repo/src/path.rs -> path.rs, repo/src/mode/mod.rs -> mode/mod.rs \n\
+             cli HASH1 HASH2         → fetch specific bodies\n\
+             \n\
+             Do not guess or stub missing implementations.\n\
+             Do not proceed until you have received all requested code.\n\
+             ==="
+        );
+
+        format!("{}{}{}", header, skeleton, meta_prompt)
     }
 }
 
