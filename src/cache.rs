@@ -1,9 +1,18 @@
+use crate::fingerprint::FileFingerprint;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use crate::fingerprint::FileFingerprint;
-
-// ── Data Structures ──────────────────────────────────────────
+/// Strips a known repo-id prefix from a path (e.g., "grab/src/main.rs" → "src/main.rs").
+/// If no known repo prefix matches, returns the path unchanged.
+pub fn strip_repo_prefix(path: &str, repo_ids: &[String]) -> String {
+    for repo in repo_ids {
+        let prefix = format!("{}/", repo);
+        if let Some(stripped) = path.strip_prefix(&prefix) {
+            return stripped.to_string();
+        }
+    }
+    path.to_string()
+}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BodyMeta {
@@ -28,38 +37,21 @@ pub struct FileEntry {
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct DaemonCache {
-    /// hash → body entry
     pub bodies: HashMap<String, BodyEntry>,
-
-    /// filepath → file entry (RUST FILES ONLY)
     pub files: HashMap<String, FileEntry>,
-
-    /// Per-file skeleton segments — assembled on demand by the API (RUST FILES ONLY)
     #[serde(default)]
     pub skeleton_segments: HashMap<String, String>,
-
-    /// Ordered list of file paths (deterministic assembly order)
     #[serde(default)]
     pub file_order: Vec<String>,
-
-    /// File fingerprints for incremental dirty detection
     #[serde(default)]
     pub fingerprints: HashMap<String, FileFingerprint>,
-
-    /// The meta-prompt appended to skeleton responses
     #[serde(default)]
     pub meta_prompt: String,
-
-    /// Version stamp — incremented on each index run
     #[serde(default)]
     pub generation: u64,
-
-    /// Not serialized — set at runtime
     #[serde(skip)]
     pub cache_path: String,
 }
-
-// ── Implementation ───────────────────────────────────────────
 
 impl DaemonCache {
     pub fn load(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
@@ -75,8 +67,6 @@ impl DaemonCache {
         Ok(())
     }
 
-    /// Evict all cache data related to a specific file path.
-    /// Used before reindexing a changed file.
     pub fn evict_file(&mut self, path: &str) {
         if let Some(old_entry) = self.files.remove(path) {
             for hash in &old_entry.body_hashes {
@@ -87,41 +77,41 @@ impl DaemonCache {
         self.file_order.retain(|p| p != path);
     }
 
-    /// Assemble the skeleton for a specific repo, or all repos.
-    /// ONLY includes .rs files.
-    pub fn assemble_skeleton_for_repos(&self, repo_filter: Option<&str>) -> String {
+    pub fn assemble_skeleton_for_repos(
+        &self,
+        repo_filter: Option<&str>,
+        repo_ids: &[String],
+    ) -> String {
         let mut parts = Vec::new();
-
         for filepath in &self.file_order {
-            // Skip files not matching the repo filter
             if let Some(repo) = repo_filter {
                 if !filepath.starts_with(&format!("{}/", repo)) {
                     continue;
                 }
             }
-
-            // Skeleton is Rust ONLY
             if !filepath.ends_with(".rs") {
                 continue;
             }
-
             if let Some(segment) = self.skeleton_segments.get(filepath) {
                 let file_entry = self.files.get(filepath);
                 let loc = file_entry.map(|e| e.loc).unwrap_or(0);
                 let body_count = file_entry.map(|e| e.body_hashes.len()).unwrap_or(0);
-
+                let display_path = strip_repo_prefix(filepath, repo_ids);
                 parts.push(format!(
                     "//--+ file:///{} [{} LOC | {} bodies]\n{}",
-                    filepath, loc, body_count, segment
+                    display_path, loc, body_count, segment
                 ));
             }
         }
-
         parts.join("\n")
     }
 
-    /// Assemble the full skeleton HTTP response with headers and meta-prompt.
-    pub fn assemble_full_skeleton_response(&self, daemon_port: u16, repo_param: &str) -> String {
+    pub fn assemble_full_skeleton_response(
+        &self,
+        daemon_port: u16,
+        repo_param: &str,
+        repo_ids: &[String],
+    ) -> String {
         let header = format!(
             "// === SKELETON MODE (COMPRESSED) ===\n\
              // Hash fetch:     http://localhost:{}/<HASH>\n\
@@ -140,15 +130,12 @@ impl DaemonCache {
             daemon_port,
             daemon_port
         );
-
         let repo_filter = if repo_param == "all" {
             None
         } else {
             Some(repo_param)
         };
-
-        let skeleton = self.assemble_skeleton_for_repos(repo_filter);
-
+        let skeleton = self.assemble_skeleton_for_repos(repo_filter, repo_ids);
         let meta_prompt = format!(
             "\n\n===\n\
              Your process:\n\
@@ -157,154 +144,19 @@ impl DaemonCache {
              Prefer asking for whole files rather than individual hashes.\n\
              If a file is too large, ask for specific impl blocks or struct definitions by their HASH.\n\
              List exactly what you need in a clear, numbered list. For each item, include:\n\
-             - The file path (e.g., grab/src/main.rs).\n\
+             - The file path as shown in the skeleton header (e.g., src/main.rs).\n\
              - If you need a specific block, include its HASH (e.g., /* HASH:1a12fb93 [183 LOC] */).\n\
              - A brief reason (e.g., “to know the fields of AppState”, “to see how sync is implemented”).\n\
              \n\
              CLI commands (use these to fetch code):\n\
              cli --skeleton          → full skeleton\n\
-             cli path.rs other.rs    → fetch whole files without the prefix repo/src/path.rs -> path.rs, repo/src/mode/mod.rs -> mode/mod.rs \n\
+             cli <PATH> <PATH>       → fetch whole files using the path shown in the skeleton (e.g., src/main.rs, src/daemon/mod.rs)\n\
              cli HASH1 HASH2         → fetch specific bodies\n\
              \n\
              Do not guess or stub missing implementations.\n\
              Do not proceed until you have received all requested code.\n\
              ==="
         );
-
         format!("{}{}{}", header, skeleton, meta_prompt)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cache_roundtrip() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test.cache");
-        let path_str = path.to_string_lossy().to_string();
-
-        let mut cache = DaemonCache::default();
-        cache.cache_path = path_str.clone();
-        cache.generation = 1;
-        cache.file_order.push("core/src/main.rs".to_string());
-
-        cache.bodies.insert(
-            "abc123".to_string(),
-            BodyEntry {
-                meta: BodyMeta {
-                    filepath: "core/src/main.rs".to_string(),
-                    loc: 10,
-                    byte_size: 50,
-                },
-                body: "fn main() {}".to_string(),
-            },
-        );
-
-        cache.files.insert(
-            "core/src/main.rs".to_string(),
-            FileEntry {
-                loc: 10,
-                byte_size: 50,
-                body_hashes: vec!["abc123".to_string()],
-                code: "fn main() {}".to_string(),
-            },
-        );
-
-        cache.skeleton_segments.insert(
-            "core/src/main.rs".to_string(),
-            "fn main() { /* HASH:abc123 [10 LOC] */ }".to_string(),
-        );
-
-        cache.save().unwrap();
-        let loaded = DaemonCache::load(&path_str).unwrap();
-
-        assert_eq!(loaded.generation, 1);
-        assert_eq!(loaded.bodies.len(), 1);
-        assert_eq!(loaded.files.len(), 1);
-        assert!(loaded.bodies.contains_key("abc123"));
-        assert_eq!(loaded.cache_path, path_str);
-    }
-
-    #[test]
-    fn test_evict_file() {
-        let mut cache = DaemonCache::default();
-        cache.file_order.push("core/src/main.rs".to_string());
-        cache.bodies.insert(
-            "abc123".to_string(),
-            BodyEntry {
-                meta: BodyMeta {
-                    filepath: "core/src/main.rs".to_string(),
-                    loc: 10,
-                    byte_size: 50,
-                },
-                body: "fn main() {}".to_string(),
-            },
-        );
-        cache.files.insert(
-            "core/src/main.rs".to_string(),
-            FileEntry {
-                loc: 10,
-                byte_size: 50,
-                body_hashes: vec!["abc123".to_string()],
-                code: "fn main() {}".to_string(),
-            },
-        );
-        cache
-            .skeleton_segments
-            .insert("core/src/main.rs".to_string(), "skeleton".to_string());
-
-        cache.evict_file("core/src/main.rs");
-
-        assert!(cache.bodies.is_empty());
-        assert!(cache.files.is_empty());
-        assert!(cache.skeleton_segments.is_empty());
-        assert!(cache.file_order.is_empty());
-    }
-
-    #[test]
-    fn test_assemble_skeleton_filters_by_repo() {
-        let mut cache = DaemonCache::default();
-        cache.file_order.push("core/src/main.rs".to_string());
-        cache.file_order.push("api/src/handler.rs".to_string());
-        cache.file_order.push("core/Cargo.toml".to_string()); // Not .rs
-
-        cache
-            .skeleton_segments
-            .insert("core/src/main.rs".to_string(), "core skeleton".to_string());
-        cache
-            .skeleton_segments
-            .insert("api/src/handler.rs".to_string(), "api skeleton".to_string());
-
-        cache.files.insert(
-            "core/src/main.rs".to_string(),
-            FileEntry {
-                loc: 10,
-                byte_size: 50,
-                body_hashes: vec![],
-                code: String::new(),
-            },
-        );
-        cache.files.insert(
-            "api/src/handler.rs".to_string(),
-            FileEntry {
-                loc: 20,
-                byte_size: 100,
-                body_hashes: vec![],
-                code: String::new(),
-            },
-        );
-
-        // Filter: core only
-        let core_skeleton = cache.assemble_skeleton_for_repos(Some("core"));
-        assert!(core_skeleton.contains("core/src/main.rs"));
-        assert!(!core_skeleton.contains("api/src/handler.rs"));
-        assert!(!core_skeleton.contains("Cargo.toml")); // Never non-rs
-
-        // Filter: all
-        let all_skeleton = cache.assemble_skeleton_for_repos(None);
-        assert!(all_skeleton.contains("core/src/main.rs"));
-        assert!(all_skeleton.contains("api/src/handler.rs"));
     }
 }

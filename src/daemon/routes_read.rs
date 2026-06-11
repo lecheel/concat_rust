@@ -1,5 +1,5 @@
-//--+ src/daemon/routes_read.rs
-
+use super::state::AppState;
+use crate::cache::strip_repo_prefix;
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderValue, StatusCode},
@@ -7,29 +7,27 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use super::state::AppState;
+async fn collect_repo_ids(state: &AppState) -> Vec<String> {
+    let reg = state.registry.lock().await;
+    reg.repos.keys().cloned().collect()
+}
 
-// ── Helper to build responses with dynamic headers ──────────
 pub fn build_response(status: StatusCode, headers: Vec<(&str, String)>, body: String) -> Response {
     let mut response = (status, body).into_response();
     for (key, value) in headers {
         if let Ok(name) = key.parse::<axum::http::header::HeaderName>() {
             if let Ok(val) = value.parse::<HeaderValue>() {
-                response.headers_mut().insert(name, val); // ← was append
+                response.headers_mut().insert(name, val);
             }
         }
     }
     response
 }
 
-// ── Query Params ─────────────────────────────────────────────
-
 #[derive(Deserialize, Debug)]
 pub struct SkeletonQuery {
     pub repo: Option<String>,
 }
-
-// ── JSON Response Types ──────────────────────────────────────
 
 #[derive(Serialize)]
 pub struct BodyInfoResponse {
@@ -65,19 +63,16 @@ pub struct CatalogResponse {
     pub total_bodies: usize,
 }
 
-// ── Routes ───────────────────────────────────────────────────
-
-/// GET /skeleton
 pub async fn get_skeleton(
     State(state): State<AppState>,
     Query(params): Query<SkeletonQuery>,
 ) -> Response {
     let db = state.cache.lock().await;
+    let repo_ids = collect_repo_ids(&state).await;
     let repo_param = params.repo.unwrap_or_else(|| "all".to_string());
-
-    let skeleton = db.assemble_full_skeleton_response(state.daemon_port, repo_param.as_str());
+    let skeleton =
+        db.assemble_full_skeleton_response(state.daemon_port, repo_param.as_str(), &repo_ids);
     let loc = skeleton.lines().count();
-
     build_response(
         StatusCode::OK,
         vec![("x-loc", loc.to_string()), ("x-repo", repo_param)],
@@ -85,36 +80,31 @@ pub async fn get_skeleton(
     )
 }
 
-/// GET /catalog
 pub async fn get_catalog(State(state): State<AppState>) -> Response {
     let db = state.cache.lock().await;
-
+    let repo_ids = collect_repo_ids(&state).await;
     let mut files = Vec::new();
     let mut total_loc = 0;
     let mut total_bodies = 0;
-
     for (filepath, entry) in &db.files {
         total_loc += entry.loc;
         total_bodies += entry.body_hashes.len();
-
         let mut body_infos: Vec<BodyInfoResponse> = entry
             .body_hashes
             .iter()
             .filter_map(|h| {
                 db.bodies.get(h).map(|e| BodyInfoResponse {
                     hash: h.clone(),
-                    filepath: e.meta.filepath.clone(),
+                    filepath: strip_repo_prefix(&e.meta.filepath, &repo_ids),
                     loc: e.meta.loc,
                     byte_size: e.meta.byte_size,
                 })
             })
             .collect();
-
         body_infos.sort_by(|a, b| b.loc.cmp(&a.loc));
         body_infos.truncate(5);
-
         files.push(CatalogFileSummary {
-            filepath: filepath.clone(),
+            filepath: strip_repo_prefix(filepath, &repo_ids),
             loc: entry.loc,
             num_bodies: entry.body_hashes.len(),
             top_hashes: body_infos,
@@ -122,15 +112,12 @@ pub async fn get_catalog(State(state): State<AppState>) -> Response {
             source: "cache".to_string(),
         });
     }
-
     files.sort_by(|a, b| b.loc.cmp(&a.loc));
-
     let resp = CatalogResponse {
         files,
         total_loc,
         total_bodies,
     };
-
     match serde_json::to_string_pretty(&resp) {
         Ok(json) => build_response(
             StatusCode::OK,
@@ -145,23 +132,20 @@ pub async fn get_catalog(State(state): State<AppState>) -> Response {
     }
 }
 
-/// GET /info/:hash
 pub async fn get_body_info(Path(prefix): Path<String>, State(state): State<AppState>) -> Response {
     let db = state.cache.lock().await;
-
+    let repo_ids = collect_repo_ids(&state).await;
     let hashes: Vec<&str> = prefix
         .split(|c| c == '+' || c == ',')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
-
     let mut infos = Vec::new();
-
     for h in hashes {
         if let Some(entry) = db.bodies.get(h) {
             infos.push(BodyInfoResponse {
                 hash: h.to_string(),
-                filepath: entry.meta.filepath.clone(),
+                filepath: strip_repo_prefix(&entry.meta.filepath, &repo_ids),
                 loc: entry.meta.loc,
                 byte_size: entry.meta.byte_size,
             });
@@ -171,7 +155,6 @@ pub async fn get_body_info(Path(prefix): Path<String>, State(state): State<AppSt
                 .iter()
                 .filter(|(hash, _)| hash.starts_with(h))
                 .collect();
-
             match matches.len() {
                 0 => {
                     return build_response(
@@ -184,7 +167,7 @@ pub async fn get_body_info(Path(prefix): Path<String>, State(state): State<AppSt
                     let (hash, entry) = matches[0];
                     infos.push(BodyInfoResponse {
                         hash: hash.clone(),
-                        filepath: entry.meta.filepath.clone(),
+                        filepath: strip_repo_prefix(&entry.meta.filepath, &repo_ids),
                         loc: entry.meta.loc,
                         byte_size: entry.meta.byte_size,
                     });
@@ -192,7 +175,14 @@ pub async fn get_body_info(Path(prefix): Path<String>, State(state): State<AppSt
                 _ => {
                     let list: Vec<String> = matches
                         .iter()
-                        .map(|(h, e)| format!("  {}  {} LOC  ({})", h, e.meta.loc, e.meta.filepath))
+                        .map(|(h, e)| {
+                            format!(
+                                "  {}  {} LOC  ({})",
+                                h,
+                                e.meta.loc,
+                                strip_repo_prefix(&e.meta.filepath, &repo_ids)
+                            )
+                        })
                         .collect();
                     return build_response(
                         StatusCode::CONFLICT,
@@ -208,7 +198,6 @@ pub async fn get_body_info(Path(prefix): Path<String>, State(state): State<AppSt
             }
         }
     }
-
     match serde_json::to_string_pretty(&infos) {
         Ok(json) => build_response(
             StatusCode::OK,
@@ -223,10 +212,9 @@ pub async fn get_body_info(Path(prefix): Path<String>, State(state): State<AppSt
     }
 }
 
-/// GET /file-info/*path
 pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppState>) -> Response {
     let db = state.cache.lock().await;
-
+    let repo_ids = collect_repo_ids(&state).await;
     if path.ends_with(".rs") {
         if let Some(entry) = db.files.get(&path) {
             let body_infos: Vec<BodyInfoResponse> = entry
@@ -235,21 +223,19 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
                 .filter_map(|h| {
                     db.bodies.get(h).map(|e| BodyInfoResponse {
                         hash: h.clone(),
-                        filepath: e.meta.filepath.clone(),
+                        filepath: strip_repo_prefix(&e.meta.filepath, &repo_ids),
                         loc: e.meta.loc,
                         byte_size: e.meta.byte_size,
                     })
                 })
                 .collect();
-
             let resp = FileInfoResponse {
-                filepath: path.clone(),
+                filepath: strip_repo_prefix(&path, &repo_ids),
                 loc: entry.loc,
                 byte_size: entry.byte_size,
                 body_hashes: body_infos,
                 source: "cache".to_string(),
             };
-
             return match serde_json::to_string_pretty(&resp) {
                 Ok(json) => build_response(
                     StatusCode::OK,
@@ -266,23 +252,24 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
         return build_response(
             StatusCode::NOT_FOUND,
             vec![],
-            format!("Rust file {} not in cache", path),
+            format!(
+                "Rust file {} not in cache",
+                strip_repo_prefix(&path, &repo_ids)
+            ),
         );
     }
-
     let full_path = state.central_dir.join(&path);
     if !full_path.starts_with(&state.central_dir) || !full_path.exists() {
         return build_response(
             StatusCode::NOT_FOUND,
             vec![],
-            format!("File {} not found", path),
+            format!("File {} not found", strip_repo_prefix(&path, &repo_ids)),
         );
     }
-
     match std::fs::read_to_string(&full_path) {
         Ok(content) => {
             let resp = FileInfoResponse {
-                filepath: path,
+                filepath: strip_repo_prefix(&path, &repo_ids),
                 loc: content.lines().count(),
                 byte_size: content.len(),
                 body_hashes: vec![],
@@ -309,9 +296,11 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
     }
 }
 
-/// GET /file/*path
+// === src/daemon/routes_read.rs — get_file function, two fixes ===
+
 pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -> Response {
-    // ── Rust files: CACHE ONLY ──
+    let repo_ids = collect_repo_ids(&state).await;
+    let display_path = strip_repo_prefix(&path, &repo_ids);
     if path.ends_with(".rs") {
         let db = state.cache.lock().await;
         if let Some(entry) = db.files.get(&path) {
@@ -322,8 +311,9 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
                     ("x-loc", entry.loc.to_string()),
                     ("x-byte-size", entry.byte_size.to_string()),
                     ("x-source", "cache".to_string()),
+                    ("x-filepath", display_path.clone()), // <-- .clone() added
                 ],
-                format!("//--+ file:///{}\n{}", path, entry.code),
+                format!("//--+ file:///{}\n{}", display_path, entry.code),
             );
         }
         return build_response(
@@ -332,18 +322,14 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
             "Rust file not indexed yet. Run sync first.".to_string(),
         );
     }
-
-    // ── Non-Rust files: DISK ONLY ──
     let full_path = state.central_dir.join(&path);
-
     if !full_path.starts_with(&state.central_dir) || !full_path.exists() {
         return build_response(
             StatusCode::NOT_FOUND,
             vec![],
-            format!("File not found: {}", path),
+            format!("File not found: {}", display_path),
         );
     }
-
     match std::fs::read_to_string(&full_path) {
         Ok(content) => {
             let loc = content.lines().count();
@@ -356,7 +342,6 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
                 "md" => "text/markdown",
                 _ => "text/plain",
             };
-
             build_response(
                 StatusCode::OK,
                 vec![
@@ -364,28 +349,27 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
                     ("x-loc", loc.to_string()),
                     ("x-byte-size", content.len().to_string()),
                     ("x-source", "disk".to_string()),
+                    ("x-filepath", display_path.clone()), // <-- .clone() added
                 ],
-                format!("//--+ file:///{}\n{}", path, content),
+                format!("//--+ file:///{}\n{}", display_path, content),
             )
         }
         Err(e) => build_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             vec![],
-            format!("Failed to read {}: {}", path, e),
+            format!("Failed to read {}: {}", display_path, e),
         ),
     }
 }
 
-/// GET /:hash
 pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>) -> Response {
     let db = state.cache.lock().await;
-
+    let repo_ids = collect_repo_ids(&state).await;
     let hashes: Vec<&str> = prefix
-        .split(|c| c == '+' || c == ',')
+        .split(|c: char| c == '+' || c == ',')
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
         .collect();
-
     if hashes.is_empty() {
         return build_response(
             StatusCode::BAD_REQUEST,
@@ -393,29 +377,27 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
             "No hashes provided".to_string(),
         );
     }
-
     if hashes.len() == 1 {
         let h = hashes[0];
         if let Some(entry) = db.bodies.get(h) {
+            let dp = strip_repo_prefix(&entry.meta.filepath, &repo_ids);
             return build_response(
                 StatusCode::OK,
                 vec![
                     ("content-type", "text/plain; charset=utf-8".to_string()),
                     ("x-loc", entry.meta.loc.to_string()),
                     ("x-byte-size", entry.meta.byte_size.to_string()),
-                    ("x-filepath", entry.meta.filepath.clone()),
+                    ("x-filepath", dp.clone()),
                     ("x-hash", h.to_string()),
                 ],
-                format!("//--+ file:///{}\n{}", entry.meta.filepath, entry.body),
+                format!("//--+ file:///{}\n{}", dp, entry.body),
             );
         }
-
         let matches: Vec<_> = db
             .bodies
             .iter()
             .filter(|(hash, _)| hash.starts_with(h))
             .collect();
-
         return match matches.len() {
             0 => build_response(
                 StatusCode::NOT_FOUND,
@@ -424,25 +406,30 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
             ),
             1 => {
                 let (hash, entry) = matches[0];
+                let dp = strip_repo_prefix(&entry.meta.filepath, &repo_ids);
                 build_response(
                     StatusCode::OK,
                     vec![
                         ("content-type", "text/plain; charset=utf-8".to_string()),
                         ("x-loc", entry.meta.loc.to_string()),
                         ("x-byte-size", entry.meta.byte_size.to_string()),
-                        ("x-filepath", entry.meta.filepath.clone()),
+                        ("x-filepath", dp.clone()),
                         ("x-hash", hash.clone()),
                     ],
-                    format!(
-                        "//--+ file:///{}\n// Hash: {}\n{}",
-                        entry.meta.filepath, hash, entry.body
-                    ),
+                    format!("//--+ file:///{}\n// Hash: {}\n{}", dp, hash, entry.body),
                 )
             }
             _ => {
                 let list: Vec<String> = matches
                     .iter()
-                    .map(|(h, e)| format!("  {} {} LOC ({})", h, e.meta.loc, e.meta.filepath))
+                    .map(|(h, e)| {
+                        format!(
+                            "  {} {} LOC ({})",
+                            h,
+                            e.meta.loc,
+                            strip_repo_prefix(&e.meta.filepath, &repo_ids)
+                        )
+                    })
                     .collect();
                 build_response(
                     StatusCode::CONFLICT,
@@ -457,36 +444,33 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
             }
         };
     }
-
-    // Multi-hash
     let mut results = Vec::new();
     let mut total_loc = 0usize;
     let mut not_found = Vec::new();
-
     for h in hashes {
         if let Some(entry) = db.bodies.get(h) {
             total_loc += entry.meta.loc;
+            let dp = strip_repo_prefix(&entry.meta.filepath, &repo_ids);
             results.push(format!(
                 "//--+ file:///{}\n// Hash: {}\n{}",
-                entry.meta.filepath, h, entry.body
+                dp, h, entry.body
             ));
             continue;
         }
-
         let matches: Vec<_> = db
             .bodies
             .iter()
             .filter(|(hash, _)| hash.starts_with(h))
             .collect();
-
         match matches.len() {
             0 => not_found.push(h.to_string()),
             1 => {
                 let (hash, entry) = matches[0];
                 total_loc += entry.meta.loc;
+                let dp = strip_repo_prefix(&entry.meta.filepath, &repo_ids);
                 results.push(format!(
                     "//--+ file:///{}\n// Hash: {}\n{}",
-                    entry.meta.filepath, hash, entry.body
+                    dp, hash, entry.body
                 ));
             }
             _ => {
@@ -494,7 +478,6 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
             }
         }
     }
-
     if !not_found.is_empty() {
         return build_response(
             StatusCode::BAD_REQUEST,
@@ -502,7 +485,6 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
             format!("Hashes not found: {}", not_found.join(", ")),
         );
     }
-
     build_response(
         StatusCode::OK,
         vec![

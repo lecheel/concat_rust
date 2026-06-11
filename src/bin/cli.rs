@@ -1,4 +1,6 @@
-//--+ src/bin/cli.rs
+// === src/bin/cli.rs ===
+// CHANGES: Added has_repo_prefix(), updated resolve_path to detect existing repo prefixes,
+// updated cmd_file/cmd_use to show clean display paths, updated resolve message
 
 use arboard::Clipboard;
 use clap::{Parser, Subcommand};
@@ -8,80 +10,52 @@ use clap::{Parser, Subcommand};
 struct Cli {
     #[command(subcommand)]
     command: Commands,
-
-    /// Daemon host
     #[arg(long, default_value = "127.0.0.1", global = true)]
     host: String,
-
-    /// Daemon port
     #[arg(long, default_value_t = 7890, global = true)]
     port: u16,
-
-    /// Warn if total LOC exceeds this threshold
     #[arg(long, default_value_t = 2000, global = true)]
     warn_loc: usize,
 }
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Set active repo (or 'none')
-    Use { repo_id: String },
-
-    /// Show active repo
+    Use {
+        repo_id: String,
+    },
     Active,
-
-    /// List registered repos
     Repos,
-
-    /// Register a new repo
-    AddRepo { id: String, source_path: String },
-
-    /// Remove a repo
-    RemoveRepo { id: String },
-
-    /// Trigger sync (all or specific repo)
+    AddRepo {
+        id: String,
+        source_path: String,
+    },
+    RemoveRepo {
+        id: String,
+    },
     Sync {
-        /// Specific repo ID (syncs all if omitted)
         repo: Option<String>,
     },
-
-    /// Show catalog of all files and LOC
     Catalog {
         #[arg(long)]
         repo: Option<String>,
     },
-
-    /// Fetch skeleton to clipboard
     Skeleton {
         #[arg(long)]
         repo: Option<String>,
     },
-
-    /// Fetch whole file(s) by path
     File {
-        /// File paths (comma or space separated, e.g., lib.rs main.rs or lib.rs,main.rs)
         paths: Vec<String>,
     },
-
-    /// Fetch body(ies) by hash
     Hash {
-        /// Hash values
         hashes: Vec<String>,
     },
-
-    /// Show LOC metadata without downloading
     Info {
         target: String,
-        /// Target is a file path, not a hash
         #[arg(long)]
         file: bool,
     },
 }
 
-// ── Helpers ──────────────────────────────────────────────────
-// ── Path Resolution ─────────────────────────────────────────
-
-/// Root-level files that should NOT get auto src/ prefix
 const ROOT_LEVEL_FILES: &[&str] = &[
     "Cargo.toml",
     "Cargo.lock",
@@ -95,50 +69,44 @@ const ROOT_LEVEL_FILES: &[&str] = &[
     "build.rs",
 ];
 
-/// Determine if `src/` should be auto-prepended to the path.
 fn should_auto_prefix_src(path: &str) -> bool {
-    // Already has src/ as a component
     if path.starts_with("src/") || path.contains("/src/") {
         return false;
     }
-
-    // Known root-level config files — never prefix
     let filename = path.rsplit('/').next().unwrap_or(path);
     if ROOT_LEVEL_FILES.contains(&filename) {
         return false;
     }
-
-    // Has subdirectories (e.g., daemon/mod.rs) — likely a src path
     if path.contains('/') {
         return true;
     }
-
-    // Single .rs file (e.g., main.rs, lib.rs, sync.rs)
     if path.ends_with(".rs") {
         return true;
     }
-
     false
 }
 
-/// Resolve a user-provided path to a fully-qualified daemon path.
-///   daemon/mod.rs  +  repo=grab  →  grab/src/daemon/mod.rs
-///   sync.rs        +  repo=grab  →  grab/src/sync.rs
-///   Cargo.toml     +  repo=grab  →  grab/Cargo.toml
-///   src/main.rs    +  repo=grab  →  grab/src/main.rs
-///   grab/src/main.rs  +  no repo →  grab/src/main.rs
+/// Detects if a path already starts with a repo-id prefix (e.g., "grab/src/main.rs").
+/// A repo prefix is a first path component that has no dot (not a filename extension) and isn't "src".
+fn has_repo_prefix(path: &str) -> bool {
+    if let Some(slash_pos) = path.find('/') {
+        let first = &path[..slash_pos];
+        !first.contains('.') && first != "src"
+    } else {
+        false
+    }
+}
+
 fn resolve_path(input: &str, active_repo: Option<&str>) -> String {
-    // Step 1: Auto-prepend src/ for source-like paths
     let with_src = if should_auto_prefix_src(input) {
         format!("src/{}", input)
     } else {
         input.to_string()
     };
-
-    // Step 2: Prepend active repo unless path already starts with it
     if let Some(repo) = active_repo {
         let repo_prefix = format!("{}/", repo);
-        if with_src.starts_with(&repo_prefix) {
+        if with_src.starts_with(&repo_prefix) || has_repo_prefix(&with_src) {
+            // Path already has a repo prefix — use as-is
             with_src
         } else {
             format!("{}{}", repo_prefix, with_src)
@@ -146,6 +114,13 @@ fn resolve_path(input: &str, active_repo: Option<&str>) -> String {
     } else {
         with_src
     }
+}
+
+/// Returns the display path (without repo prefix) for user-facing messages.
+fn display_path<'a>(resolved: &'a str, active_repo: Option<&str>) -> &'a str {
+    active_repo
+        .and_then(|r| resolved.strip_prefix(&format!("{}/", r)))
+        .unwrap_or(resolved)
 }
 
 fn base_url(cli: &Cli) -> String {
@@ -235,7 +210,6 @@ fn set_active_repo(repo: &str) {
 
 fn copy_to_clipboard(content: &str, warn_loc: usize, summaries: &[String]) {
     let total_loc = content.lines().count();
-
     if total_loc > warn_loc {
         eprintln!(
             "⚠️  WARNING: About to copy {} LOC (threshold: {})",
@@ -247,7 +221,6 @@ fn copy_to_clipboard(content: &str, warn_loc: usize, summaries: &[String]) {
         eprintln!("  Waiting 3s... (Ctrl+C to abort)");
         std::thread::sleep(std::time::Duration::from_secs(3));
     }
-
     match Clipboard::new().and_then(|mut cb| cb.set_text(content)) {
         Ok(_) => {
             println!("✅ Copied {} LOC to clipboard:", total_loc);
@@ -262,16 +235,12 @@ fn copy_to_clipboard(content: &str, warn_loc: usize, summaries: &[String]) {
     }
 }
 
-// ── Command Implementations ──────────────────────────────────
-
 fn cmd_use(repo_id: &str, base: &str) {
     if repo_id == "none" {
         set_active_repo("none");
         println!("Cleared active repo. Paths must be fully qualified.");
         return;
     }
-
-    // Verify repo exists on daemon
     let repos = match fetch_json(&format!("{}/repos", base)) {
         Ok(r) => r,
         Err(e) => {
@@ -279,15 +248,11 @@ fn cmd_use(repo_id: &str, base: &str) {
             return;
         }
     };
-
     if let Some(arr) = repos.as_array() {
         if arr.iter().any(|r| r["id"].as_str() == Some(repo_id)) {
             set_active_repo(repo_id);
             println!("Active repo: {}", repo_id);
-            println!(
-                "  Paths like 'src/main.rs' will resolve to '{}/src/main.rs'",
-                repo_id
-            );
+            println!("  Files will be looked up in repo '{}'", repo_id);
         } else {
             eprintln!("❌ Unknown repo '{}'. Available:", repo_id);
             for r in arr {
@@ -302,7 +267,7 @@ fn cmd_use(repo_id: &str, base: &str) {
 fn cmd_active() {
     match get_active_repo() {
         Some(repo) => println!("Active repo: {}", repo),
-        None => println!("No active repo set. Paths must be fully qualified (repo/path)."),
+        None => println!("No active repo set. Use: cli use <repo_id>"),
     }
 }
 
@@ -314,7 +279,6 @@ fn cmd_repos(base: &str) {
             return;
         }
     };
-
     if let Some(arr) = repos.as_array() {
         if arr.is_empty() {
             println!("No repos registered. Use: cli add-repo <id> <path>");
@@ -336,7 +300,6 @@ fn cmd_repos(base: &str) {
             } else {
                 "⚪"
             };
-
             println!(
                 "{} {:10} {:30} [{}] ({} files)",
                 active, id, path, branch, files
@@ -385,15 +348,12 @@ fn cmd_catalog(_repo: Option<&str>, base: &str) {
             let files = cat["files"].as_array().cloned().unwrap_or_default();
             let total_loc = cat["total_loc"].as_u64().unwrap_or(0);
             let total_bodies = cat["total_bodies"].as_u64().unwrap_or(0);
-
             println!("📊 Catalog ({} LOC, {} bodies)", total_loc, total_bodies);
             println!("{}", "─".repeat(60));
-
             for f in &files {
                 let fp = f["filepath"].as_str().unwrap_or("?");
                 let loc = f["loc"].as_u64().unwrap_or(0);
                 let num_bodies = f["num_bodies"].as_u64().unwrap_or(0);
-
                 let icon = if loc > 2000 {
                     "🔴"
                 } else if loc > 500 {
@@ -401,12 +361,10 @@ fn cmd_catalog(_repo: Option<&str>, base: &str) {
                 } else {
                     "🟢"
                 };
-
                 println!(
                     "{} {:45} {:>5} LOC  {:>3} bodies",
                     icon, fp, loc, num_bodies
                 );
-
                 if let Some(top) = f["top_hashes"].as_array() {
                     for t in top.iter().take(3) {
                         let h = t["hash"].as_str().unwrap_or("?");
@@ -427,7 +385,6 @@ fn cmd_skeleton(repo: Option<&str>, base: &str, warn_loc: usize) {
     if let Some(r) = repo {
         url = format!("{}?repo={}", url, r);
     }
-
     match fetch_text(&url) {
         Ok(body) => {
             let loc = body.lines().count();
@@ -441,21 +398,17 @@ fn cmd_file(paths: &[String], base: &str, warn_loc: usize) {
     let active = get_active_repo();
     let mut full_content = String::new();
     let mut summaries = Vec::new();
-
     for p in paths {
-        // Support both space-separated and comma-separated paths
         for part in p.split(',') {
             let part = part.trim();
             if part.is_empty() {
                 continue;
             }
-
             let resolved = resolve_path(part, active.as_deref());
-
-            if resolved != part {
-                eprintln!("  → resolved: {}", resolved);
+            let dp = display_path(&resolved, active.as_deref());
+            if dp != part {
+                eprintln!("  → resolved: {}", dp);
             }
-
             let url = format!("{}/file/{}", base, resolved);
             match fetch_text(&url) {
                 Ok(body) => {
@@ -464,13 +417,12 @@ fn cmd_file(paths: &[String], base: &str, warn_loc: usize) {
                         full_content.push_str("\n\n");
                     }
                     full_content.push_str(&body);
-                    summaries.push(format!("File: {} [{} LOC]", resolved, loc));
+                    summaries.push(format!("File: {} [{} LOC]", dp, loc));
                 }
-                Err(e) => eprintln!("❌ {}: {}", resolved, e),
+                Err(e) => eprintln!("❌ {}: {}", dp, e),
             }
         }
     }
-
     if !full_content.is_empty() {
         copy_to_clipboard(&full_content, warn_loc, &summaries);
     }
@@ -480,11 +432,10 @@ fn cmd_info(target: &str, is_file: bool, base: &str) {
     if is_file {
         let active = get_active_repo();
         let resolved = resolve_path(target, active.as_deref());
-
-        if resolved != target {
-            eprintln!("  → resolved: {}", resolved);
+        let dp = display_path(&resolved, active.as_deref());
+        if dp != target {
+            eprintln!("  → resolved: {}", dp);
         }
-
         let url = format!("{}/file-info/{}", base, resolved);
         match fetch_json(&url) {
             Ok(info) => {
@@ -492,7 +443,6 @@ fn cmd_info(target: &str, is_file: bool, base: &str) {
                 let loc = info["loc"].as_u64().unwrap_or(0);
                 let byte_size = info["byte_size"].as_u64().unwrap_or(0);
                 let source = info["source"].as_str().unwrap_or("?");
-
                 let icon = if loc > 2000 {
                     "🔴"
                 } else if loc > 500 {
@@ -517,7 +467,6 @@ fn cmd_info(target: &str, is_file: bool, base: &str) {
                         let l = i["loc"].as_u64().unwrap_or(0);
                         let b = i["byte_size"].as_u64().unwrap_or(0);
                         let f = i["filepath"].as_str().unwrap_or("?");
-
                         let warning = if l > 500 {
                             " 🔴 LARGE"
                         } else if l > 100 {
@@ -539,7 +488,6 @@ fn cmd_info(target: &str, is_file: bool, base: &str) {
 fn cmd_hash(hashes: &[String], base: &str, warn_loc: usize) {
     let hash_query = hashes.join("+");
     let url = format!("{}/{}", base, hash_query);
-
     match fetch_text(&url) {
         Ok(body) => {
             let loc = body.lines().count();
@@ -549,32 +497,26 @@ fn cmd_hash(hashes: &[String], base: &str, warn_loc: usize) {
                     found_files.insert(path.to_string());
                 }
             }
-
             let files_str = if found_files.is_empty() {
                 "unknown".to_string()
             } else {
                 found_files.into_iter().collect::<Vec<_>>().join(", ")
             };
-
             let summary = format!(
                 "Hashes: [{}] (Files: {}) [{} LOC]",
                 hashes.join(", "),
                 files_str,
                 loc
             );
-
             copy_to_clipboard(&body, warn_loc, &[summary]);
         }
         Err(e) => eprintln!("❌ {}", e),
     }
 }
 
-// ── Main ─────────────────────────────────────────────────────
-
 fn main() {
     let cli = Cli::parse();
     let base = base_url(&cli);
-
     match cli.command {
         Commands::Use { repo_id } => cmd_use(&repo_id, &base),
         Commands::Active => cmd_active(),
