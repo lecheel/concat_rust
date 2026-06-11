@@ -1,3 +1,6 @@
+// === ext/background.js ===
+// CHANGES: Added fetchRepos message handler
+
 // Open side panel when the extension action icon is clicked
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
@@ -34,6 +37,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
+
+  if (message.action === 'fetchRepos') {
+    const host = message.host || '127.0.0.1';
+    const port = message.port || '7890';
+    const url = `http://${host}:${port}/repos`;
+    fetch(url)
+      .then(resp => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.json();
+      })
+      .then(data => sendResponse({ success: true, data }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
 
 async function fetchAndPaste(host, port, paramsStr) {
@@ -61,7 +78,6 @@ async function fetchAndPaste(host, port, paramsStr) {
     } else {
       const hashes = params.getAll('hash');
       if (hashes.length > 0) {
-        // Combine all hashes into a single HTTP request using '+' delimiter
         const hashQuery = hashes.join('+');
         const resp = await fetch(`${baseUrl}/${hashQuery}`);
         if (!resp.ok) {
@@ -71,7 +87,6 @@ async function fetchAndPaste(host, port, paramsStr) {
         if (clipboardContent) clipboardContent += '\n\n';
         clipboardContent += text;
 
-        // Extract and aggregate file paths from the combined output's `file:///` headers
         const lines = text.split('\n');
         const foundFiles = new Set();
         for (const line of lines) {
@@ -79,7 +94,7 @@ async function fetchAndPaste(host, port, paramsStr) {
             foundFiles.add(line.replace('//--+ file:///', ''));
           }
         }
-        
+
         if (foundFiles.size > 0) {
           const filesList = Array.from(foundFiles).join(', ');
           summaries.push(`${hashes.length} block(s) -> [${filesList}]`);
@@ -89,7 +104,6 @@ async function fetchAndPaste(host, port, paramsStr) {
       }
 
       for (const filepath of params.getAll('file')) {
-        // Encode path segments individually to preserve slashes for Axum *path matching
         const safePath = filepath.split('/').map(encodeURIComponent).join('/');
         await fetchUrl(`${baseUrl}/file/${safePath}`, filepath);
       }
@@ -167,17 +181,14 @@ function findBestEditable() {
     return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) > 0;
   };
 
-  // Textareas
   document.querySelectorAll('textarea').forEach(el => {
     if (isVisible(el)) candidates.push({ el, priority: 3 });
   });
 
-  // Text/search inputs
   document.querySelectorAll('input[type="text"], input[type="search"], input:not([type])').forEach(el => {
     if (isVisible(el)) candidates.push({ el, priority: 2 });
   });
 
-  // Contenteditable divs
   document.querySelectorAll('[contenteditable="true"], [contenteditable=""]').forEach(el => {
     if (isVisible(el)) candidates.push({ el, priority: 1 });
   });

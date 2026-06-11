@@ -1,3 +1,6 @@
+// === ext/sidepanel.js ===
+// CHANGES: Added repo chip fetching/rendering/clicking, hasRepoPrefix(), updated resolvePath()
+
 document.addEventListener('DOMContentLoaded', () => {
   // ── Dynamic Header Title ──
   function updateHeaderTitle() {
@@ -69,6 +72,8 @@ document.addEventListener('DOMContentLoaded', () => {
     if (result.port && portInput) portInput.value = result.port;
     if (result.activeRepo && activeRepoInput) activeRepoInput.value = result.activeRepo;
     updateHeaderTitle();
+    // Auto-load repos on startup so chips appear immediately
+    loadRepos();
   });
 
   ['host', 'port', 'activeRepo'].forEach(id => {
@@ -84,9 +89,103 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Live-update header title as user types in the repo field
+  // Live-update header title + chips as user types in the repo field
   if (activeRepoInput) {
-    activeRepoInput.addEventListener('input', updateHeaderTitle);
+    activeRepoInput.addEventListener('input', () => {
+      updateHeaderTitle();
+      highlightActiveChip();
+    });
+  }
+
+  // ── Repo chips ──
+  const refreshBtn = document.getElementById('refreshRepos');
+  if (refreshBtn) {
+    refreshBtn.addEventListener('click', loadRepos);
+  }
+
+  async function loadRepos() {
+    const btn = document.getElementById('refreshRepos');
+    const chipsContainer = document.getElementById('repoChips');
+    if (!btn || !chipsContainer) return;
+
+    const host = (hostInput ? hostInput.value.trim() : '') || '127.0.0.1';
+    const port = (portInput ? portInput.value.trim() : '') || '7890';
+
+    btn.classList.add('spinning');
+    btn.textContent = '…';
+
+    try {
+      const response = await chrome.runtime.sendMessage({
+        action: 'fetchRepos',
+        host,
+        port
+      });
+
+      if (response && response.success && Array.isArray(response.data)) {
+        renderRepoChips(response.data);
+      } else {
+        const errMsg = response ? response.error : 'Unknown error';
+        chipsContainer.innerHTML = `<span class="repo-chips-empty">⚠ ${escapeHtml(errMsg)}</span>`;
+      }
+    } catch (err) {
+      chipsContainer.innerHTML = `<span class="repo-chips-empty">⚠ ${escapeHtml(err.message)}</span>`;
+    } finally {
+      btn.classList.remove('spinning');
+      btn.textContent = '↻';
+    }
+  }
+
+  function renderRepoChips(repos) {
+    const chipsContainer = document.getElementById('repoChips');
+    const activeRepoInput = document.getElementById('activeRepo');
+    if (!chipsContainer || !activeRepoInput) return;
+
+    const currentRepo = activeRepoInput.value.trim();
+
+    if (repos.length === 0) {
+      chipsContainer.innerHTML = '<span class="repo-chips-empty">No repos registered. Use: cli add-repo &lt;id&gt; &lt;path&gt;</span>';
+      return;
+    }
+
+    chipsContainer.innerHTML = '';
+    for (const repo of repos) {
+      const id = repo.id || '?';
+      const branch = repo.git_branch || 'detached';
+      const files = repo.file_count != null ? repo.file_count : '?';
+
+      const chip = document.createElement('div');
+      chip.className = 'repo-chip' + (id === currentRepo ? ' active' : '');
+      chip.dataset.repoId = id;
+      chip.title = `${id} [${branch}] (${files} files)`;
+      chip.innerHTML = `${escapeHtml(id)} <span class="chip-branch">${escapeHtml(branch)}</span>`;
+
+      chip.addEventListener('click', () => {
+        // Toggle: clicking active repo deselects it
+        if (activeRepoInput.value.trim() === id) {
+          activeRepoInput.value = '';
+        } else {
+          activeRepoInput.value = id;
+        }
+        // Persist
+        chrome.storage.local.set({ activeRepo: activeRepoInput.value.trim() });
+        updateHeaderTitle();
+        highlightActiveChip();
+      });
+
+      chipsContainer.appendChild(chip);
+    }
+  }
+
+  function highlightActiveChip() {
+    const chipsContainer = document.getElementById('repoChips');
+    const activeRepoInput = document.getElementById('activeRepo');
+    if (!chipsContainer || !activeRepoInput) return;
+
+    const currentRepo = activeRepoInput.value.trim();
+    const chips = chipsContainer.querySelectorAll('.repo-chip');
+    chips.forEach(chip => {
+      chip.classList.toggle('active', chip.dataset.repoId === currentRepo);
+    });
   }
 
   // ── Fetch & Paste ──
@@ -142,6 +241,7 @@ document.addEventListener('DOMContentLoaded', () => {
           activeRepoInput.value = parsed.repo;
           chrome.storage.local.set({ activeRepo: parsed.repo });
           updateHeaderTitle();
+          highlightActiveChip();
         }
       }
     });
@@ -164,10 +264,6 @@ function shouldAutoPrefixSrc(path) {
   return false;
 }
 
-/**
- * Detects if a path already starts with a repo-id prefix (e.g., "grab/src/main.rs").
- * A repo prefix is a first path component that has no dot (not a filename) and isn't "src".
- */
 function hasRepoPrefix(path) {
   const slashPos = path.indexOf('/');
   if (slashPos === -1) return false;
@@ -180,7 +276,6 @@ function resolvePath(input, activeRepo) {
 
   if (activeRepo) {
     const repoPrefix = `${activeRepo}/`;
-    // If path already starts with the active repo prefix, or has any other repo prefix, use as-is
     if (withSrc.startsWith(repoPrefix) || hasRepoPrefix(withSrc)) {
       return withSrc;
     }
@@ -231,7 +326,6 @@ async function doFetch() {
     const hashes = hashesText.split(/[\r\n\s,]+/).map(h => h.trim()).filter(Boolean);
     const rawFiles = filesText.split(/[\s,]+/).map(f => f.trim()).filter(Boolean);
 
-    // Resolve file paths with active repo (adds repo prefix for daemon lookup)
     const resolvedFiles = rawFiles.map(f => resolvePath(f, activeRepo));
 
     if (hashes.length === 0 && resolvedFiles.length === 0) {
@@ -284,7 +378,6 @@ function parseCommandLine(line) {
   let startIndex = 0;
   const firstToken = tokens[0].toLowerCase();
 
-  // Skip binary execution prefix
   if (firstToken === 'cli' || firstToken === 'concat-cli' || firstToken.endsWith('cli') || firstToken === 'cargo') {
     startIndex = 1;
     if (firstToken === 'cargo' && tokens[1] && tokens[1].toLowerCase() === 'run') {

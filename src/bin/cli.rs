@@ -309,7 +309,14 @@ fn cmd_repos(base: &str) {
 }
 
 fn cmd_add_repo(id: &str, source_path: &str, base: &str) {
-    let body = serde_json::json!({ "id": id, "source_path": source_path });
+    let resolved_path = if source_path == "." {
+        std::env::current_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|_| ".".to_string())
+    } else {
+        source_path.to_string()
+    };
+    let body = serde_json::json!({ "id": id, "source_path": resolved_path });
     match post_json(&format!("{}/repos", base), &body) {
         Ok(msg) => println!("✅ {}", msg),
         Err(e) => eprintln!("❌ {}", e),

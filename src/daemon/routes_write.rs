@@ -54,14 +54,11 @@ pub async fn get_repos(State(state): State<AppState>) -> Response {
     }
 }
 
-/// POST /repos — register a new repo or update an existing one
 pub async fn post_repo_add(
     State(state): State<AppState>,
     axum::Json(req): axum::Json<AddRepoRequest>,
 ) -> Response {
     let source = std::path::PathBuf::from(&req.source_path);
-
-    // Canonicalize to absolute path — resolves ".", "..", symlinks
     let source = match source.canonicalize() {
         Ok(p) => p,
         Err(_) => {
@@ -72,13 +69,30 @@ pub async fn post_repo_add(
             );
         }
     };
-
     if !source.is_dir() {
         return super::routes_read::build_response(
             StatusCode::BAD_REQUEST,
             vec![],
             format!("Source path is not a directory: {}", req.source_path),
         );
+    }
+
+    // NEW: check if source path is already registered under a different repo ID
+    {
+        let reg = state.registry.lock().await;
+        for (existing_id, entry) in &reg.repos {
+            if entry.source_path == source && existing_id != &req.id {
+                return super::routes_read::build_response(
+                    StatusCode::CONFLICT,
+                    vec![],
+                    format!(
+                        "❌ Source path '{}' is already registered as repo '{}'. Remove it first if you want to re-register.",
+                        source.display(),
+                        existing_id
+                    ),
+                );
+            }
+        }
     }
 
     let mut reg = state.registry.lock().await;

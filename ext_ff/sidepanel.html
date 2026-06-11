@@ -1,6 +1,3 @@
-<!-- === ext/sidepanel.html === -->
-<!-- CHANGES: Redesigned active repo section with refresh button and clickable repo chips -->
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -18,7 +15,6 @@
       gap: 13px;
     }
 
-    /* ── Header ── */
     .header {
       display: flex;
       align-items: center;
@@ -38,7 +34,6 @@
     .header-title { font-size: 14px; font-weight: 600; }
     .header-sub   { font-size: 11px; color: #888; margin-top: 1px; }
 
-    /* ── Section ── */
     .section { display: flex; flex-direction: column; gap: 5px; }
     .section-label {
       display: flex; justify-content: space-between; align-items: center;
@@ -73,13 +68,11 @@
     }
     .field-hint { font-size: 10px; color: #aaa; }
 
-    /* ── Daemon row ── */
     .addr-row { display: flex; align-items: center; gap: 5px; }
     .addr-row input[type="text"]   { flex: 1; min-width: 0; }
     .addr-row input[type="number"] { width: 70px; }
     .addr-sep { color: #bbb; flex-shrink: 0; font-weight: 600; }
 
-    /* ── Repo section ── */
     .repo-header { display: flex; align-items: center; gap: 6px; }
     .repo-header input[type="text"] { flex: 1; min-width: 0; }
     .btn-icon {
@@ -138,7 +131,6 @@
       font-style: italic;
     }
 
-    /* ── Skeleton toggle ── */
     .toggle-row {
       display: flex; align-items: center; gap: 9px;
       padding: 8px 10px;
@@ -163,10 +155,8 @@
     .toggle-text { font-size: 12px; font-weight: 500; }
     .toggle-sub  { font-size: 10px; color: #999; margin-top: 1px; }
 
-    /* ── Divider ── */
     .divider { height: 1px; background: #ebebeb; }
 
-    /* ── Fetch button ── */
     .fetch-btn {
       width: 100%; padding: 9px;
       border: 1px solid #d0d0d0;
@@ -182,7 +172,6 @@
     .fetch-btn:active  { transform: scale(0.99); }
     .fetch-btn:disabled { opacity: .5; cursor: not-allowed; }
 
-    /* ── Status box ── */
     .status-box {
       border-radius: 7px;
       padding: 8px 10px;
@@ -222,13 +211,11 @@
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
-    /* ── Dimmed state ── */
     .dimmed { opacity: .35; pointer-events: none; }
   </style>
 </head>
 <body>
 
-  <!-- Header -->
   <div class="header">
     <div class="header-icon">⟨/⟩</div>
     <div>
@@ -237,7 +224,6 @@
     </div>
   </div>
 
-  <!-- Quick Command Line Parser -->
   <div class="section">
     <div class="section-label">
       <span class="label">⚡ Quick CLI Parser</span>
@@ -249,7 +235,6 @@
 
   <div class="divider"></div>
 
-  <!-- Hashes -->
   <div class="section" id="hashSection">
     <div class="section-label">
       <span class="label"># Hashes</span>
@@ -259,7 +244,6 @@
     <span class="field-hint">One hash per line</span>
   </div>
 
-  <!-- Files -->
   <div class="section" id="fileSection">
     <div class="section-label">
       <span class="label">📁 File paths</span>
@@ -271,7 +255,6 @@
 
   <div class="divider"></div>
 
-  <!-- Skeleton toggle -->
   <div class="section">
     <span class="label">⚙ Options</span>
     <label class="toggle-row" id="skeletonRow">
@@ -283,7 +266,6 @@
     </label>
   </div>
 
-  <!-- Active repo -->
   <div class="section">
     <span class="label">📦 Active repo</span>
     <div class="repo-header">
@@ -295,7 +277,6 @@
     </div>
   </div>
 
-  <!-- Daemon address -->
   <div class="section">
     <span class="label">🌐 Daemon address</span>
     <div class="addr-row">
@@ -305,13 +286,11 @@
     </div>
   </div>
 
-  <!-- Fetch button -->
   <button class="fetch-btn" id="fetchBtn">
     <span id="fetchBtnIcon">▶</span>
     <span id="fetchBtnLabel">Fetch &amp; Paste</span>
   </button>
 
-  <!-- Status -->
   <div class="status-box" id="statusBox">
     <div class="spinner" id="spinner" style="display:none"></div>
     <div id="statusContent"></div>

@@ -1,17 +1,15 @@
-// Open side panel (Chrome) or toggle sidebar (Firefox) when the toolbar icon is clicked
-if (typeof chrome !== "undefined" && chrome.sidePanel && chrome.sidePanel.setPanelBehavior) {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
-} else if (typeof browser !== "undefined" && browser.sidebarAction && browser.action) {
-  browser.action.onClicked.addListener(() => {
-    browser.sidebarAction.toggle();
-  });
-}
+// Firefox: Open sidebar when the extension action icon is clicked
+chrome.action.onClicked.addListener((tab) => {
+  if (typeof browser !== 'undefined' && browser.sidebarAction) {
+    browser.sidebarAction.open();
+  }
+});
 
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "fetchHash",
     title: "Fetch this hash from concat_rust",
-    contexts: ["selection"],
+    contexts: ["selection"]
   });
 });
 
@@ -19,9 +17,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "fetchHash") {
     const hash = info.selectionText.trim();
     if (hash) {
-      chrome.storage.local.get(["host", "port"], async (result) => {
-        const host = result.host || "127.0.0.1";
-        const port = result.port || "7890";
+      chrome.storage.local.get(['host', 'port'], async (result) => {
+        const host = result.host || '127.0.0.1';
+        const port = result.port || '7890';
         const paramsStr = `hash=${encodeURIComponent(hash)}`;
         try {
           await fetchAndPaste(host, port, paramsStr);
@@ -34,10 +32,24 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === "fetchAndPaste") {
+  if (message.action === 'fetchAndPaste') {
     fetchAndPaste(message.host, message.port, message.params)
-      .then((result) => sendResponse(result))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
+      .then(result => sendResponse(result))
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === 'fetchRepos') {
+    const host = message.host || '127.0.0.1';
+    const port = message.port || '7890';
+    const url = `http://${host}:${port}/repos`;
+    fetch(url)
+      .then(resp => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.json();
+      })
+      .then(data => sendResponse({ success: true, data }))
+      .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
 });
@@ -45,7 +57,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function fetchAndPaste(host, port, paramsStr) {
   const baseUrl = `http://${host}:${port}`;
   const params = new URLSearchParams(paramsStr);
-  let clipboardContent = "";
+  let clipboardContent = '';
   const summaries = [];
 
   async function fetchUrl(url, label) {
@@ -54,55 +66,58 @@ async function fetchAndPaste(host, port, paramsStr) {
       throw new Error(`HTTP ${response.status} for ${label}`);
     }
     const text = await response.text();
-    if (clipboardContent) clipboardContent += "\n\n";
+    if (clipboardContent) clipboardContent += '\n\n';
     clipboardContent += text;
     summaries.push(label);
   }
 
   try {
-    if (params.has("skeleton")) {
-      await fetchUrl(`${baseUrl}/skeleton`, "SKELETON (full output)");
+    if (params.has('skeleton')) {
+      const repo = params.get('repo') || '';
+      const url = repo ? `${baseUrl}/skeleton?repo=${encodeURIComponent(repo)}` : `${baseUrl}/skeleton`;
+      await fetchUrl(url, 'SKELETON (full output)');
     } else {
-      const hashes = params.getAll("hash");
+      const hashes = params.getAll('hash');
       if (hashes.length > 0) {
-        const hashQuery = hashes.join("+");
+        const hashQuery = hashes.join('+');
         const resp = await fetch(`${baseUrl}/${hashQuery}`);
         if (!resp.ok) {
           throw new Error(`Hashes query failed (HTTP ${resp.status})`);
         }
         const text = await resp.text();
-        if (clipboardContent) clipboardContent += "\n\n";
+        if (clipboardContent) clipboardContent += '\n\n';
         clipboardContent += text;
 
-        const lines = text.split("\n");
+        const lines = text.split('\n');
         const foundFiles = new Set();
         for (const line of lines) {
-          if (line.startsWith("//--+ file:///")) {
-            foundFiles.add(line.replace("//--+ file:///", ""));
+          if (line.startsWith('//--+ file:///')) {
+            foundFiles.add(line.replace('//--+ file:///', ''));
           }
         }
 
         if (foundFiles.size > 0) {
-          const filesList = Array.from(foundFiles).join(", ");
+          const filesList = Array.from(foundFiles).join(', ');
           summaries.push(`${hashes.length} block(s) -> [${filesList}]`);
         } else {
           summaries.push(`${hashes.length} block(s)`);
         }
       }
 
-      for (const filepath of params.getAll("file")) {
-        await fetchUrl(`${baseUrl}/file/${encodeURIComponent(filepath)}`, filepath);
+      for (const filepath of params.getAll('file')) {
+        const safePath = filepath.split('/').map(encodeURIComponent).join('/');
+        await fetchUrl(`${baseUrl}/file/${safePath}`, filepath);
       }
     }
 
-    if (!clipboardContent) throw new Error("No content retrieved");
+    if (!clipboardContent) throw new Error('No content retrieved');
 
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab?.id) {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: pasteAndCopyToClipboardInPage,
-        args: [clipboardContent],
+        args: [clipboardContent]
       });
     }
     return { success: true, summaries };
@@ -112,35 +127,34 @@ async function fetchAndPaste(host, port, paramsStr) {
 }
 
 function pasteAndCopyToClipboardInPage(textToPaste) {
-  navigator.clipboard.writeText(textToPaste).catch((err) => {
-    console.warn("System clipboard write failed:", err);
+  navigator.clipboard.writeText(textToPaste).catch(err => {
+    console.warn('System clipboard write failed:', err);
   });
 
   let target = document.activeElement;
-  let isEditable =
-    target &&
-    (target.isContentEditable ||
-      target.tagName === "TEXTAREA" ||
-      (target.tagName === "INPUT" &&
-        !["button", "checkbox", "radio", "submit", "hidden"].includes(target.type)));
+  let isEditable = target && (
+    target.isContentEditable ||
+    target.tagName === 'TEXTAREA' ||
+    (target.tagName === 'INPUT' && !['button','checkbox','radio','submit','hidden'].includes(target.type))
+  );
 
   if (!isEditable) {
     target = findBestEditable();
   }
 
   if (!target) {
-    console.warn("No editable field found. Content copied to clipboard only.");
+    console.warn('No editable field found. Content copied to clipboard only.');
     return;
   }
 
   target.focus();
 
-  if (target.tagName === "TEXTAREA" || target.tagName === "INPUT") {
+  if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
     const start = target.selectionStart;
-    const end = target.selectionEnd;
+    const end   = target.selectionEnd;
     const value = target.value;
     target.value = value.slice(0, start) + textToPaste + value.slice(end);
-    target.dispatchEvent(new Event("input", { bubbles: true }));
+    target.dispatchEvent(new Event('input', { bubbles: true }));
     target.setSelectionRange(start + textToPaste.length, start + textToPaste.length);
   } else if (target.isContentEditable) {
     target.focus();
@@ -155,7 +169,7 @@ function pasteAndCopyToClipboardInPage(textToPaste) {
     } else {
       target.innerText += textToPaste;
     }
-    target.dispatchEvent(new Event("input", { bubbles: true }));
+    target.dispatchEvent(new Event('input', { bubbles: true }));
   }
 }
 
@@ -165,20 +179,18 @@ function findBestEditable() {
   const isVisible = (el) => {
     if (el.offsetWidth === 0 && el.offsetHeight === 0) return false;
     const s = getComputedStyle(el);
-    return s.display !== "none" && s.visibility !== "hidden" && parseFloat(s.opacity) > 0;
+    return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) > 0;
   };
 
-  document.querySelectorAll("textarea").forEach((el) => {
+  document.querySelectorAll('textarea').forEach(el => {
     if (isVisible(el)) candidates.push({ el, priority: 3 });
   });
 
-  document
-    .querySelectorAll('input[type="text"], input[type="search"], input:not([type])')
-    .forEach((el) => {
-      if (isVisible(el)) candidates.push({ el, priority: 2 });
-    });
+  document.querySelectorAll('input[type="text"], input[type="search"], input:not([type])').forEach(el => {
+    if (isVisible(el)) candidates.push({ el, priority: 2 });
+  });
 
-  document.querySelectorAll('[contenteditable="true"], [contenteditable=""]').forEach((el) => {
+  document.querySelectorAll('[contenteditable="true"], [contenteditable=""]').forEach(el => {
     if (isVisible(el)) candidates.push({ el, priority: 1 });
   });
 
