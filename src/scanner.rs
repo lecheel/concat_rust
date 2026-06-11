@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::cache::{BodyEntry, BodyMeta, FileEntry};
+use crate::cache::BodyMeta;
 use crate::compress::compress_code;
 use crate::config::{FileKind, ScanConfig};
 use crate::rustfmt::run_rustfmt;
