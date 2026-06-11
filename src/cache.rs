@@ -153,6 +153,7 @@ impl DaemonCache {
              cli <PATH> <PATH>       → fetch whole files using the path shown in the skeleton (e.g., src/main.rs, src/daemon/mod.rs)\n\
              cli HASH1 HASH2         → fetch specific bodies\n\
              \n\
+             ## asking via this format cli file1 file2 hash1 hash ... ## \n\
              Do not guess or stub missing implementations.\n\
              Do not proceed until you have received all requested code.\n\
              ==="

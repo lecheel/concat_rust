@@ -397,4 +397,20 @@ function parseCommandLine(line) {
           if (parsingFiles || cleanToken.includes('.') || cleanToken.includes('/')) {
             files.push(cleanToken);
           } else {
-            hashes.push(cleanToken
+            hashes.push(cleanToken);
+          }
+        }
+      }
+    }
+  }
+
+  return { hashes, files, skeleton, repo };
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}

@@ -1,8 +1,4 @@
-// === ext/sidepanel.js ===
-// CHANGES: Added repo chip fetching/rendering/clicking, hasRepoPrefix(), updated resolvePath()
-
 document.addEventListener('DOMContentLoaded', () => {
-  // ── Dynamic Header Title ──
   function updateHeaderTitle() {
     const activeRepoInput = document.getElementById('activeRepo');
     const headerTitle = document.getElementById('headerTitle');
@@ -14,7 +10,6 @@ document.addEventListener('DOMContentLoaded', () => {
       : 'Concat Rust Paster';
   }
 
-  // ── Skeleton toggle ──
   let skeletonChecked = false;
   const skeletonRow = document.getElementById('skeletonRow');
   const skeletonBox = document.getElementById('skeletonBox');
@@ -31,7 +26,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── Clear buttons ──
   const clearQuickCommandBtn = document.getElementById('clearQuickCommand');
   const quickCommandInput = document.getElementById('quickCommand');
   if (clearQuickCommandBtn && quickCommandInput) {
@@ -62,7 +56,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── Restore saved host/port/repo ──
   const hostInput = document.getElementById('host');
   const portInput = document.getElementById('port');
   const activeRepoInput = document.getElementById('activeRepo');
@@ -72,7 +65,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (result.port && portInput) portInput.value = result.port;
     if (result.activeRepo && activeRepoInput) activeRepoInput.value = result.activeRepo;
     updateHeaderTitle();
-    // Auto-load repos on startup so chips appear immediately
     loadRepos();
   });
 
@@ -89,7 +81,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Live-update header title + chips as user types in the repo field
   if (activeRepoInput) {
     activeRepoInput.addEventListener('input', () => {
       updateHeaderTitle();
@@ -97,7 +88,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── Repo chips ──
   const refreshBtn = document.getElementById('refreshRepos');
   if (refreshBtn) {
     refreshBtn.addEventListener('click', loadRepos);
@@ -160,13 +150,11 @@ document.addEventListener('DOMContentLoaded', () => {
       chip.innerHTML = `${escapeHtml(id)} <span class="chip-branch">${escapeHtml(branch)}</span>`;
 
       chip.addEventListener('click', () => {
-        // Toggle: clicking active repo deselects it
         if (activeRepoInput.value.trim() === id) {
           activeRepoInput.value = '';
         } else {
           activeRepoInput.value = id;
         }
-        // Persist
         chrome.storage.local.set({ activeRepo: activeRepoInput.value.trim() });
         updateHeaderTitle();
         highlightActiveChip();
@@ -188,7 +176,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── Fetch & Paste ──
   const fetchBtn = document.getElementById('fetchBtn');
   if (fetchBtn) {
     fetchBtn.addEventListener('click', doFetch);
@@ -211,7 +198,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // ── Quick Command Parser ──
   if (quickCommandInput) {
     quickCommandInput.addEventListener('input', () => {
       const line = quickCommandInput.value.trim();
@@ -248,8 +234,6 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 });
 
-// ── V2 Path Resolution Logic ─────────────────────────────────
-
 const ROOT_LEVEL_FILES = [
   "Cargo.toml", "Cargo.lock", "docker-compose.yml", "docker-compose.yaml",
   "Dockerfile", ".env", ".env.example", "Makefile", "README.md", "build.rs"
@@ -284,7 +268,6 @@ function resolvePath(input, activeRepo) {
   return withSrc;
 }
 
-// ── Status helpers ──
 function setStatus(type, html) {
   const box     = document.getElementById('statusBox');
   const spinner = document.getElementById('spinner');
@@ -367,10 +350,6 @@ async function doFetch() {
   }
 }
 
-/**
- * V2 Command Line Parser
- * Supports: cli use grab file lib.rs main.rs OR cli 83d650c708ad
- */
 function parseCommandLine(line) {
   const tokens = line.trim().split(/\s+/);
   if (tokens.length === 0 || (tokens.length === 1 && tokens[0] === "")) return null;

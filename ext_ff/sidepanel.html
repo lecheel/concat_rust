@@ -2,76 +2,166 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <style>
+<style>
+    /* ── Theme Definitions ── */
+    :root {
+      --bg-color: #ffffff;
+      --text-color: #1a1a1a;
+      --border-color: #e5e5e5;
+      
+      --header-icon-bg: #f3f3f3;
+      --text-muted: #888;
+      --text-label: #555;
+      --text-hint: #aaa;
+      
+      --input-bg: #f8f8f8;
+      --input-border: #e0e0e0;
+      --input-focus-border: #aaa;
+      --input-focus-shadow: rgba(0, 0, 0, 0.06);
+      
+      --toggle-bg: #f8f8f8;
+      --toggle-hover-bg: #f0f0f0;
+      --toggle-box-border: #ccc;
+      --toggle-box-checked-bg: #333;
+      --toggle-box-checked-border: #333;
+      --toggle-box-checked-text: #ffffff;
+      
+      --divider-color: #ebebeb;
+      
+      --button-bg: #ffffff;
+      --button-border: #d0d0d0;
+      --button-hover-bg: #f4f4f4;
+      
+      --status-loading-bg: #f5f5f5;
+      --status-loading-border: #e5e5e5;
+      --status-loading-text: #666;
+      --status-success-bg: #f0faf4;
+      --status-success-border: #b2dfc4;
+      --status-success-text: #1d6b3e;
+      --status-error-bg: #fff3f3;
+      --status-error-border: #f5b8b8;
+      --status-error-text: #b03030;
+      
+      --spinner-border: #ccc;
+      --spinner-top: #888;
+    }
+
+    /* Auto-detect Firefox / OS dark theme */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-color: #1c1b22;             /* Firefox standard panel dark background */
+        --text-color: #fbfbfe;           /* High contrast light text */
+        --border-color: #38383d;
+        
+        --header-icon-bg: #2b2a33;
+        --text-muted: #9e9e9e;
+        --text-label: #cfcfd8;
+        --text-hint: #8f8f9d;
+        
+        --input-bg: #2b2a33;
+        --input-border: #52525e;
+        --input-focus-border: #00ddff;   /* Neon cyan blue accent */
+        --input-focus-shadow: rgba(0, 221, 255, 0.15);
+        
+        --toggle-bg: #2b2a33;
+        --toggle-hover-bg: #3b3a42;
+        --toggle-box-border: #52525e;
+        --toggle-box-checked-bg: #00ddff;
+        --toggle-box-checked-border: #00ddff;
+        --toggle-box-checked-text: #1c1b22;
+        
+        --divider-color: #2b2a33;
+        
+        --button-bg: #2b2a33;
+        --button-border: #52525e;
+        --button-hover-bg: #3b3a42;
+        
+        --status-loading-bg: #23222b;
+        --status-loading-border: #42414d;
+        --status-loading-text: #bfbfbf;
+        --status-success-bg: #0d2818;
+        --status-success-border: #1b4d2c;
+        --status-success-text: #86efac;
+        --status-error-bg: #2a1215;
+        --status-error-border: #5a1e24;
+        --status-error-text: #fca5a5;
+        
+        --spinner-border: #52525e;
+        --spinner-top: #00ddff;
+      }
+    }
+
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
     body {
       font-family: system-ui, sans-serif;
       font-size: 13px;
-      background: #fff;
-      color: #1a1a1a;
+      background: var(--bg-color);
+      color: var(--text-color);
       padding: 14px;
       display: flex;
       flex-direction: column;
       gap: 13px;
     }
 
+    /* ── Header ── */
     .header {
       display: flex;
       align-items: center;
       gap: 10px;
       padding-bottom: 12px;
-      border-bottom: 1px solid #e5e5e5;
+      border-bottom: 1px solid var(--border-color);
     }
     .header-icon {
       width: 32px; height: 32px;
       border-radius: 8px;
-      background: #f3f3f3;
-      border: 1px solid #e5e5e5;
+      background: var(--header-icon-bg);
+      border: 1px solid var(--border-color);
       display: flex; align-items: center; justify-content: center;
       font-size: 17px;
       flex-shrink: 0;
     }
     .header-title { font-size: 14px; font-weight: 600; }
-    .header-sub   { font-size: 11px; color: #888; margin-top: 1px; }
+    .header-sub   { font-size: 11px; color: var(--text-muted); margin-top: 1px; }
 
+    /* ── Section ── */
     .section { display: flex; flex-direction: column; gap: 5px; }
     .section-label {
       display: flex; justify-content: space-between; align-items: center;
     }
     .label {
       font-size: 11px; font-weight: 600;
-      color: #555; text-transform: uppercase; letter-spacing: .4px;
+      color: var(--text-label); text-transform: uppercase; letter-spacing: .4px;
     }
     .btn-clear {
-      font-size: 11px; color: #aaa; cursor: pointer;
+      font-size: 11px; color: var(--text-hint); cursor: pointer;
       border: none; background: none; padding: 2px 5px;
       border-radius: 4px; line-height: 1;
     }
-    .btn-clear:hover { color: #555; background: #f0f0f0; }
+    .btn-clear:hover { color: var(--text-label); background: var(--toggle-hover-bg); }
 
     textarea, input[type="text"], input[type="number"] {
       width: 100%;
-      background: #f8f8f8;
-      border: 1px solid #e0e0e0;
+      background: var(--input-bg);
+      border: 1px solid var(--input-border);
       border-radius: 7px;
       padding: 7px 9px;
       font-size: 12px;
       font-family: 'Menlo', 'Consolas', monospace;
-      color: #1a1a1a;
+      color: var(--text-color);
       outline: none;
       transition: border-color .15s, box-shadow .15s;
     }
     textarea { height: 80px; resize: vertical; line-height: 1.55; }
     textarea:focus, input:focus {
-      border-color: #aaa;
-      box-shadow: 0 0 0 2px rgba(0,0,0,0.06);
+      border-color: var(--input-focus-border);
+      box-shadow: 0 0 0 2px var(--input-focus-shadow);
     }
-    .field-hint { font-size: 10px; color: #aaa; }
+    .field-hint { font-size: 10px; color: var(--text-hint); }
 
     .addr-row { display: flex; align-items: center; gap: 5px; }
     .addr-row input[type="text"]   { flex: 1; min-width: 0; }
     .addr-row input[type="number"] { width: 70px; }
-    .addr-sep { color: #bbb; flex-shrink: 0; font-weight: 600; }
+    .addr-sep { color: var(--text-hint); flex-shrink: 0; font-weight: 600; }
 
     .repo-header { display: flex; align-items: center; gap: 6px; }
     .repo-header input[type="text"] { flex: 1; min-width: 0; }
@@ -134,44 +224,50 @@
     .toggle-row {
       display: flex; align-items: center; gap: 9px;
       padding: 8px 10px;
-      background: #f8f8f8;
-      border: 1px solid #e5e5e5;
+      background: var(--toggle-bg);
+      border: 1px solid var(--border-color);
       border-radius: 7px;
       cursor: pointer;
       user-select: none;
     }
-    .toggle-row:hover { background: #f0f0f0; }
+    .toggle-row:hover { background: var(--toggle-hover-bg); }
     .toggle-box {
       width: 15px; height: 15px;
       border-radius: 4px;
-      border: 1.5px solid #ccc;
-      background: #fff;
+      border: 1.5px solid var(--toggle-box-border);
+      background: var(--bg-color);
       flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
       transition: background .15s, border-color .15s;
-      font-size: 10px; color: #fff;
+      font-size: 10px; color: var(--toggle-box-checked-text);
     }
-    .toggle-box.checked { background: #333; border-color: #333; }
+    .toggle-box.checked {
+      background: var(--toggle-box-checked-bg);
+      border-color: var(--toggle-box-checked-border);
+    }
     .toggle-text { font-size: 12px; font-weight: 500; }
-    .toggle-sub  { font-size: 10px; color: #999; margin-top: 1px; }
+    .toggle-sub  { font-size: 10px; color: var(--text-muted); margin-top: 1px; }
 
-    .divider { height: 1px; background: #ebebeb; }
+    /* ── Divider ── */
+    .divider { height: 1px; background: var(--divider-color); }
 
+    /* ── Fetch button ── */
     .fetch-btn {
       width: 100%; padding: 9px;
-      border: 1px solid #d0d0d0;
+      border: 1px solid var(--button-border);
       border-radius: 7px;
-      background: #fff;
-      color: #1a1a1a;
+      background: var(--button-bg);
+      color: var(--text-color);
       font-size: 13px; font-weight: 600;
       cursor: pointer;
       display: flex; align-items: center; justify-content: center; gap: 6px;
       transition: background .15s;
     }
-    .fetch-btn:hover   { background: #f4f4f4; }
+    .fetch-btn:hover   { background: var(--button-hover-bg); }
     .fetch-btn:active  { transform: scale(0.99); }
     .fetch-btn:disabled { opacity: .5; cursor: not-allowed; }
 
+    /* ── Status box ── */
     .status-box {
       border-radius: 7px;
       padding: 8px 10px;
@@ -181,21 +277,21 @@
     }
     .status-box.loading {
       display: flex; align-items: center; gap: 8px;
-      background: #f5f5f5;
-      border: 1px solid #e5e5e5;
-      color: #666;
+      background: var(--status-loading-bg);
+      border: 1px solid var(--status-loading-border);
+      color: var(--status-loading-text);
     }
     .status-box.success {
       display: block;
-      background: #f0faf4;
-      border: 1px solid #b2dfc4;
-      color: #1d6b3e;
+      background: var(--status-success-bg);
+      border: 1px solid var(--status-success-border);
+      color: var(--status-success-text);
     }
     .status-box.error {
       display: block;
-      background: #fff3f3;
-      border: 1px solid #f5b8b8;
-      color: #b03030;
+      background: var(--status-error-bg);
+      border: 1px solid var(--status-error-border);
+      color: var(--status-error-text);
     }
     .status-title { font-weight: 600; margin-bottom: 5px; }
     .status-items { display: flex; flex-direction: column; gap: 3px; }
@@ -203,14 +299,15 @@
 
     .spinner {
       width: 12px; height: 12px;
-      border: 1.5px solid #ccc;
-      border-top-color: #888;
+      border: 1.5px solid var(--spinner-border);
+      border-top-color: var(--spinner-top);
       border-radius: 50%;
       animation: spin .7s linear infinite;
       flex-shrink: 0;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
 
+    /* ── Dimmed state ── */
     .dimmed { opacity: .35; pointer-events: none; }
   </style>
 </head>

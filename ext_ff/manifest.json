@@ -3,14 +3,6 @@
   "name": "Concat Rust Paster",
   "version": "1.2",
   "description": "Retrieve code bodies from local concat_rust daemon and paste into page",
-
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "concat-rust-paster@localhost",
-      "strict_min_version": "115.0"
-    }
-  },
-
   "permissions": [
     "activeTab",
     "scripting",
@@ -27,7 +19,7 @@
   ],
 
   "background": {
-    "service_worker": "background.js"
+    "scripts": ["background.js"]
   },
 
   "action": {
@@ -45,5 +37,14 @@
       "js": ["content.js"],
       "run_at": "document_idle"
     }
-  ]
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "concat-rust-paster@localhost",
+      "strict_min_version": "140.0",
+      "data_collection_permissions": {
+        "required": [ "none" ]
+      }
+    }
+  }
 }
