@@ -1,6 +1,3 @@
-<!-- === ext/sidepanel.html === -->
-<!-- CHANGES: Redesigned active repo section with refresh button and clickable repo chips -->
-
 <!DOCTYPE html>
 <html>
 <head>
@@ -97,6 +94,34 @@
     .btn-icon:hover { background: #eee; border-color: #ccc; }
     .btn-icon:active { transform: scale(0.95); }
     .btn-icon.spinning { pointer-events: none; opacity: 0.6; }
+
+    .drag-chip {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px;
+      margin-top: 5px;
+      background: #f0faf4;
+      border: 1.5px dashed #b2dfc4;
+      border-radius: 7px;
+      color: #1d6b3e;
+      font-weight: 600;
+      cursor: grab;
+      user-select: none;
+      transition: background .15s, border-color .15s;
+    }
+    .drag-chip:hover {
+      background: #e6f7ed;
+      border-color: #9cdcb4;
+    }
+    .drag-chip:active {
+      cursor: grabbing;
+    }
+    .drag-icon {
+      font-size: 15px;
+      line-height: 1;
+    }
 
     .repo-chips {
       display: flex;
@@ -272,16 +297,29 @@
   <div class="divider"></div>
 
   <!-- Skeleton toggle -->
-  <div class="section">
-    <span class="label">⚙ Options</span>
-    <label class="toggle-row" id="skeletonRow">
-      <div class="toggle-box" id="skeletonBox"></div>
-      <div>
-        <div class="toggle-text">Fetch skeleton</div>
-        <div class="toggle-sub">Returns full daemon output — ignores hashes &amp; files</div>
-      </div>
-    </label>
-  </div>
+
+<!-- Replace the options section in sidepanel.html -->
+<div class="section">
+  <span class="label">⚙ Options</span>
+  
+  <!-- Skeleton Toggle -->
+  <label class="toggle-row" id="skeletonRow">
+    <div class="toggle-box" id="skeletonBox"></div>
+    <div>
+      <div class="toggle-text">Fetch skeleton</div>
+      <div class="toggle-sub">Returns full daemon output — ignores hashes &amp; files</div>
+    </div>
+  </label>
+
+  <!-- Paste as File Toggle (New) -->
+  <label class="toggle-row" id="pasteFileRow" style="margin-top: 6px;">
+    <div class="toggle-box" id="pasteFileBox"></div>
+    <div>
+      <div class="toggle-text">Paste as file attachment</div>
+      <div class="toggle-sub">Uploads directly to chat input as a file card</div>
+    </div>
+  </label>
+</div>
 
   <!-- Active repo -->
   <div class="section">
@@ -310,6 +348,14 @@
     <span id="fetchBtnIcon">▶</span>
     <span id="fetchBtnLabel">Fetch &amp; Paste</span>
   </button>
+
+  <div id="dragChip" class="drag-chip" draggable="true">
+  <!-- Drag Chip (Draggable File) -->
+  <div id="dragChip" class="drag-chip" draggable="true">
+    <span class="drag-icon">📁</span>
+    <span id="dragChipLabel">Drag as file attachment</span>
+  </div>
+
 
   <!-- Status -->
   <div class="status-box" id="statusBox">

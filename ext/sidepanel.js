@@ -1,4 +1,18 @@
+// Global placeholder for retrieved data to bind to the drag payload
+let currentFetchedText = '';
+
 document.addEventListener('DOMContentLoaded', () => {
+
+  const pasteFileRow = document.getElementById('pasteFileRow');
+  const pasteFileBox = document.getElementById('pasteFileBox');
+
+  if (pasteFileRow && pasteFileBox) {
+    pasteFileRow.addEventListener('click', () => {
+      const isChecked = pasteFileBox.classList.toggle('checked');
+      pasteFileBox.textContent = isChecked ? '✓' : '';
+    });
+  }
+   
   function updateHeaderTitle() {
     const activeRepoInput = document.getElementById('activeRepo');
     const headerTitle = document.getElementById('headerTitle');
@@ -91,6 +105,70 @@ document.addEventListener('DOMContentLoaded', () => {
   const refreshBtn = document.getElementById('refreshRepos');
   if (refreshBtn) {
     refreshBtn.addEventListener('click', loadRepos);
+  }
+
+  const dragChip = document.getElementById('dragChip');
+  if (dragChip) {
+    dragChip.addEventListener('dragstart', (e) => {
+      if (!currentFetchedText) {
+        e.preventDefault();
+        return;
+      }
+      
+      e.dataTransfer.clearData();
+
+      // 1. Resolve dynamic target filename (Skeleton set to .txt)
+      let filename = 'skeleton.txt';
+      const isSkeleton = document.getElementById('skeletonBox')?.classList.contains('checked') || false;
+      const activeRepoInput = document.getElementById('activeRepo');
+      const activeRepo = activeRepoInput ? activeRepoInput.value.trim() : '';
+
+      if (isSkeleton) {
+        filename = activeRepo ? `${activeRepo}_skeleton.txt` : 'skeleton.txt';
+      } else {
+        const filesInput = document.getElementById('files');
+        const filesText = filesInput ? filesInput.value.trim() : '';
+        if (filesText) {
+          const firstFile = filesText.split(/[\s,]+/)[0];
+          if (firstFile) {
+            filename = firstFile.split('/').pop() || 'file.rs';
+          }
+        } else {
+          const hashesInput = document.getElementById('hashes');
+          const hashesText = hashesInput ? hashesInput.value.trim() : '';
+          if (hashesText) {
+            const firstHash = hashesText.split(/[\r\n\s,]+/)[0];
+            if (firstHash) {
+              filename = `block_${firstHash.substring(0, 8)}.rs`;
+            }
+          }
+        }
+      }
+
+      if (!filename.includes('.')) {
+        filename += '.rs';
+      }
+
+      const mimeType = 'text/plain';
+      const blob = new Blob([currentFetchedText], { type: mimeType });
+      const blobUrl = URL.createObjectURL(blob);
+
+      const file = new File([currentFetchedText], filename, { type: mimeType });
+      e.dataTransfer.items.add(file);
+
+      const downloadUrlData = `${mimeType}:${filename}:${blobUrl}`;
+      e.dataTransfer.setData('DownloadURL', downloadUrlData);
+      
+      e.dataTransfer.effectAllowed = 'copy';
+
+      dragChip.style.opacity = '0.5';
+
+      dragChip.addEventListener('dragend', function cleanup() {
+        URL.revokeObjectURL(blobUrl);
+        dragChip.style.opacity = '1';
+        dragChip.removeEventListener('dragend', cleanup);
+      });
+    });
   }
 
   async function loadRepos() {
@@ -278,11 +356,6 @@ function setStatus(type, html) {
   content.innerHTML = html;
 }
 
-function clearStatus() {
-  const box = document.getElementById('statusBox');
-  if (box) box.className = 'status-box';
-}
-
 async function doFetch() {
   const hashesInput = document.getElementById('hashes');
   const filesInput  = document.getElementById('files');
@@ -297,28 +370,23 @@ async function doFetch() {
   const activeRepo = activeRepoInput ? activeRepoInput.value.trim() : '';
 
   const params = new URLSearchParams();
-
   const skeletonChecked = document.getElementById('skeletonBox')?.classList.contains('checked') || false;
 
+  // Read toggle state directly from DOM
+  const pasteFileChecked = document.getElementById('pasteFileBox')?.classList.contains('checked') || false;
+
+  // Resolve target file name (Skeleton set to .txt)
+  let filename = 'skeleton.txt';
   if (skeletonChecked) {
     params.set('skeleton', 'true');
-    if (activeRepo) {
-      params.set('repo', activeRepo);
-    }
+    if (activeRepo) params.set('repo', activeRepo);
+    filename = activeRepo ? `${activeRepo}_skeleton.txt` : 'skeleton.txt';
   } else {
-    // Split input and clean up common prefixes (like "hash:" or "hash=") from pasted entries
     const hashes = hashesText.split(/[\r\n\s,]+/)
-      .map(h => {
-        let clean = h.trim();
-        if (/^hash[:=]/i.test(clean)) {
-          clean = clean.replace(/^hash[:=]/i, '');
-        }
-        return clean;
-      })
+      .map(h => h.trim().replace(/^hash[:=]/i, ''))
       .filter(Boolean);
 
     const rawFiles = filesText.split(/[\s,]+/).map(f => f.trim()).filter(Boolean);
-
     const resolvedFiles = rawFiles.map(f => resolvePath(f, activeRepo));
 
     if (hashes.length === 0 && resolvedFiles.length === 0) {
@@ -327,6 +395,17 @@ async function doFetch() {
     }
     hashes.forEach(h => params.append('hash', h));
     resolvedFiles.forEach(f => params.append('file', f));
+
+    // Name the file after the target or block hash
+    if (rawFiles.length > 0) {
+      filename = rawFiles[0].split('/').pop() || 'file.rs';
+    } else if (hashes.length > 0) {
+      filename = `block_${hashes[0].substring(0, 8)}.rs`;
+    }
+  }
+
+  if (!filename.includes('.')) {
+    filename += '.rs';
   }
 
   const btn = document.getElementById('fetchBtn');
@@ -338,7 +417,9 @@ async function doFetch() {
       action: 'fetchAndPaste',
       host,
       port,
-      params: params.toString()
+      params: params.toString(),
+      pasteAsFile: pasteFileChecked,  // Pass setting parsed from DOM
+      filename: filename              // Pass filename
     });
 
     if (response && response.success) {
@@ -359,7 +440,7 @@ async function doFetch() {
     if (btn) btn.disabled = false;
   }
 }
-
+ 
 function parseCommandLine(line) {
   const tokens = line.trim().split(/\s+/);
   if (tokens.length === 0 || (tokens.length === 1 && tokens[0] === "")) return null;
@@ -404,7 +485,6 @@ function parseCommandLine(line) {
       const parts = token.split(',').map(p => p.replace(/['"]/g, '').trim()).filter(Boolean);
       for (let cleanToken of parts) {
         if (cleanToken) {
-          // SMART CLEAN: strip hash: / HASH: / hash= prefixes
           if (/^hash[:=]/i.test(cleanToken)) {
             cleanToken = cleanToken.replace(/^hash[:=]/i, '');
           }

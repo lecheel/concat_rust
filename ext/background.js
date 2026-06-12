@@ -1,6 +1,3 @@
-// === ext/background.js ===
-// CHANGES: Added fetchRepos message handler
-
 // Open side panel when the extension action icon is clicked
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
@@ -30,9 +27,13 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'fetchAndPaste') {
-    fetchAndPaste(message.host, message.port, message.params)
+    fetchAndPaste(message.host, message.port, message.params, {
+      pasteAsFile: message.pasteAsFile,
+      filename: message.filename
+    })
       .then(result => sendResponse(result))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
@@ -53,7 +54,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
-async function fetchAndPaste(host, port, paramsStr) {
+async function fetchAndPaste(host, port, paramsStr, options = {}) {
   const baseUrl = `http://${host}:${port}`;
   const params = new URLSearchParams(paramsStr);
   let clipboardContent = '';
@@ -116,7 +117,7 @@ async function fetchAndPaste(host, port, paramsStr) {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
         func: pasteAndCopyToClipboardInPage,
-        args: [clipboardContent]
+        args: [clipboardContent, { pasteAsFile: options.pasteAsFile, filename: options.filename }]
       });
     }
     return { success: true, summaries };
@@ -125,30 +126,34 @@ async function fetchAndPaste(host, port, paramsStr) {
   }
 }
 
-// In background.js
-function pasteViaClipboardEvent(target, text) {
-  // Build a DataTransfer with the text attached
-  const dt = new DataTransfer();
-  dt.setData('text/plain', text);
+function pasteAndCopyToClipboardInPage(textToPaste, options = {}) {
+  const pasteAsFile = options.pasteAsFile;
+  const filename = options.filename || 'file.rs';
 
-  const pasteEvent = new ClipboardEvent('paste', {
-    bubbles: true,
-    cancelable: true,
-    clipboardData: dt,
-  });
+  // Always write to the OS clipboard as a safety backup
+  navigator.clipboard.writeText(textToPaste).catch(() => {});
 
-  // Fire it — the LLM UI's own paste handler picks it up
-  // exactly as if the user pressed Ctrl+V / Shift+Insert
-  target.dispatchEvent(pasteEvent);
-}
+  // 1. Programmatic File Input upload pathway
+  if (pasteAsFile) {
+    const fileInput = document.querySelector('input[type="file"]');
+    if (fileInput) {
+      try {
+        const dt = new DataTransfer();
+        dt.items.add(new File([textToPaste], filename, { type: 'text/plain' }));
+        fileInput.files = dt.files;
+        
+        // Dispatch bubbling change event so the page framework (React/Vue/etc.) handles the attachment
+        fileInput.dispatchEvent(new Event('change', { bubbles: true }));
+        return; // Success, file attached programmatically!
+      } catch (err) {
+        console.warn("Failed file input upload, falling back to text paste:", err);
+      }
+    } else {
+      console.warn("No hidden file inputs found on the active page. Falling back to text paste.");
+    }
+  }
 
-function pasteAndCopyToClipboardInPage(textToPaste) {
-  // 1. Copy to system clipboard (so user can paste normally elsewhere)
-  navigator.clipboard.writeText(textToPaste).catch(err => {
-    console.warn('System clipboard write failed:', err);
-  });
-
-  // 2. Find best editable target
+  // 2. Fallback: Standard text insertion
   let target = document.activeElement;
   let isEditable = target && (
     target.isContentEditable ||
@@ -167,7 +172,6 @@ function pasteAndCopyToClipboardInPage(textToPaste) {
 
   target.focus();
 
-  // 3. Handle standard form fields (direct value assignment)
   if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
     const start = target.selectionStart;
     const end   = target.selectionEnd;
@@ -175,8 +179,6 @@ function pasteAndCopyToClipboardInPage(textToPaste) {
     target.value = value.slice(0, start) + textToPaste + value.slice(end);
     target.dispatchEvent(new Event('input', { bubbles: true }));
     target.setSelectionRange(start + textToPaste.length, start + textToPaste.length);
-
-  // 4. Handle contenteditable (LLM inputs) – with real ClipboardEvent
   } else if (target.isContentEditable) {
     const dt = new DataTransfer();
     dt.setData('text/plain', textToPaste);
@@ -185,14 +187,11 @@ function pasteAndCopyToClipboardInPage(textToPaste) {
       cancelable: true,
       clipboardData: dt,
     });
-    const handled = target.dispatchEvent(pasteEvent);
+    target.dispatchEvent(pasteEvent);
 
-    // If the page didn't prevent default, fall back to execCommand (rare)
     if (!pasteEvent.defaultPrevented) {
       document.execCommand('insertText', false, textToPaste);
     }
-
-    // Trigger input event for any remaining listeners
     target.dispatchEvent(new Event('input', { bubbles: true }));
   }
 }
