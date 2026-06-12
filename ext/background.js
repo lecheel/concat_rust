@@ -126,12 +126,29 @@ async function fetchAndPaste(host, port, paramsStr) {
 }
 
 // In background.js
+function pasteViaClipboardEvent(target, text) {
+  // Build a DataTransfer with the text attached
+  const dt = new DataTransfer();
+  dt.setData('text/plain', text);
+
+  const pasteEvent = new ClipboardEvent('paste', {
+    bubbles: true,
+    cancelable: true,
+    clipboardData: dt,
+  });
+
+  // Fire it — the LLM UI's own paste handler picks it up
+  // exactly as if the user pressed Ctrl+V / Shift+Insert
+  target.dispatchEvent(pasteEvent);
+}
 
 function pasteAndCopyToClipboardInPage(textToPaste) {
+  // 1. Copy to system clipboard (so user can paste normally elsewhere)
   navigator.clipboard.writeText(textToPaste).catch(err => {
     console.warn('System clipboard write failed:', err);
   });
 
+  // 2. Find best editable target
   let target = document.activeElement;
   let isEditable = target && (
     target.isContentEditable ||
@@ -150,7 +167,7 @@ function pasteAndCopyToClipboardInPage(textToPaste) {
 
   target.focus();
 
-  // Handle standard Textareas and Inputs
+  // 3. Handle standard form fields (direct value assignment)
   if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
     const start = target.selectionStart;
     const end   = target.selectionEnd;
@@ -158,39 +175,24 @@ function pasteAndCopyToClipboardInPage(textToPaste) {
     target.value = value.slice(0, start) + textToPaste + value.slice(end);
     target.dispatchEvent(new Event('input', { bubbles: true }));
     target.setSelectionRange(start + textToPaste.length, start + textToPaste.length);
-  
-  // Handle ContentEditable (LLM Inputs, Web Editors)
+
+  // 4. Handle contenteditable (LLM inputs) – with real ClipboardEvent
   } else if (target.isContentEditable) {
-    // Using execCommand('insertText') is the most reliable way to insert text
-    // into contenteditable elements while preserving newlines as visual line breaks.
-    const success = document.execCommand('insertText', false, textToPaste);
-    
-    if (!success) {
-      // Fallback for very specific environments where execCommand is disabled
-      // This manually splits lines and adds <br> tags
-      const selection = window.getSelection();
-      if (selection.rangeCount) {
-        const range = selection.getRangeAt(0);
-        range.deleteContents();
-        
-        // Split by newline and join with <br> to ensure visual line breaks
-        const fragment = document.createDocumentFragment();
-        const lines = textToPaste.split('\n');
-        
-        lines.forEach((line, index) => {
-          fragment.appendChild(document.createTextNode(line));
-          if (index < lines.length - 1) {
-            fragment.appendChild(document.createElement('br'));
-          }
-        });
-        
-        range.insertNode(fragment);
-        range.collapse(false);
-        selection.removeAllRanges();
-        selection.addRange(range);
-      }
+    const dt = new DataTransfer();
+    dt.setData('text/plain', textToPaste);
+    const pasteEvent = new ClipboardEvent('paste', {
+      bubbles: true,
+      cancelable: true,
+      clipboardData: dt,
+    });
+    const handled = target.dispatchEvent(pasteEvent);
+
+    // If the page didn't prevent default, fall back to execCommand (rare)
+    if (!pasteEvent.defaultPrevented) {
+      document.execCommand('insertText', false, textToPaste);
     }
-    // Dispatch input event to trigger any listeners (like autosize or auto-send)
+
+    // Trigger input event for any remaining listeners
     target.dispatchEvent(new Event('input', { bubbles: true }));
   }
 }
