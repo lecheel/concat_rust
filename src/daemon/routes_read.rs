@@ -1,9 +1,6 @@
-//--+ ./src/daemon/routes_read.rs
-// === src/daemon/routes_read.rs ===
-// Consolidated all imports, removed duplicate get_dashboard and duplicate imports.
-
 use super::state::{AppState, RequestLog};
 use crate::cache::strip_repo_prefix;
+use axum::http::Method;
 use axum::{
     extract::{Path, Query, Request, State},
     http::{HeaderValue, StatusCode},
@@ -11,6 +8,63 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
+
+#[derive(Serialize)]
+struct LogsResponse {
+    logs: Vec<RequestLog>,
+}
+
+/// Middleware that logs every request into AppState.request_log for the dashboard
+pub async fn request_logging_middleware(
+    method: Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    State(state): State<AppState>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let start = std::time::Instant::now();
+    let path = uri.path().to_string();
+
+    let response = next.run(request).await;
+
+    let status = response.status();
+    let elapsed = start.elapsed();
+
+    let user_agent = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    // Fixed timestamp to be a String instead of u64
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
+
+    let log_entry = RequestLog {
+        method: method.to_string(),
+        path: path.clone(),
+        status: status.as_u16(),
+        timestamp,
+        duration_ms: elapsed.as_millis() as u64, // Added missing field
+        user_agent,
+    };
+
+    // Fixed: use request_log instead of log_buffer
+    {
+        let mut logs = state.request_log.lock().await;
+        logs.push(log_entry);
+        if logs.len() > 200 {
+            let drain_count = logs.len() - 200;
+            logs.drain(0..drain_count);
+        }
+    }
+
+    response
+}
 
 async fn collect_repo_ids(state: &AppState) -> Vec<String> {
     let reg = state.registry.lock().await;
@@ -263,6 +317,7 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
             ),
         );
     }
+    // Non-Rust file: serve from central_dir
     let full_path = state.central_dir.join(&path);
     if !full_path.starts_with(&state.central_dir) || !full_path.exists() {
         return build_response(
@@ -273,10 +328,12 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
     }
     match std::fs::read_to_string(&full_path) {
         Ok(content) => {
+            let byte_size = content.len();
+            let loc = content.lines().count();
             let resp = FileInfoResponse {
                 filepath: strip_repo_prefix(&path, &repo_ids),
-                loc: content.lines().count(),
-                byte_size: content.len(),
+                loc,
+                byte_size,
                 body_hashes: vec![],
                 source: "disk".to_string(),
             };
@@ -296,7 +353,7 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
         Err(e) => build_response(
             StatusCode::INTERNAL_SERVER_ERROR,
             vec![],
-            format!("Read error: {}", e),
+            format!("Failed to read file: {}", e),
         ),
     }
 }
@@ -500,8 +557,9 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
 
 /// GET /logs
 pub async fn get_logs(State(state): State<AppState>) -> Response {
-    let logs = state.log_buffer.lock().await;
-    match serde_json::to_string_pretty(&*logs) {
+    let logs = state.request_log.lock().await;
+    let resp = LogsResponse { logs: logs.clone() };
+    match serde_json::to_string_pretty(&resp) {
         Ok(json) => build_response(
             StatusCode::OK,
             vec![("content-type", "application/json".to_string())],
@@ -530,27 +588,34 @@ pub async fn log_middleware(State(state): State<AppState>, req: Request, next: N
 
     let is_log_req = path == "/logs" || path == "/dashboard" || path == "/";
 
+    let start = std::time::Instant::now(); // ← needed for duration_ms
+
     let response = next.run(req).await;
 
     if !is_log_req {
         let status = response.status().as_u16();
-        let timestamp = std::time::SystemTime::now()
+        let timestamp = std::time::SystemTime::now() // ← Fix 1: String, not u64
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs();
+            .as_secs()
+            .to_string();
+
+        let elapsed = start.elapsed(); // ← Fix 2: compute duration
 
         let log_entry = RequestLog {
-            timestamp,
             method,
             path,
             status,
+            timestamp,
+            duration_ms: elapsed.as_millis() as u64, // ← Fix 2: add missing field
             user_agent,
         };
 
-        let mut logs = state.log_buffer.lock().await;
+        let mut logs = state.request_log.lock().await; // ← Fix 3&4: request_log, not log_buffer
         logs.push(log_entry);
         if logs.len() > 200 {
-            logs.remove(0);
+            let drain_count = logs.len() - 200;
+            logs.drain(0..drain_count);
         }
     }
 

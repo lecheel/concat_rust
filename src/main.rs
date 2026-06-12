@@ -1,5 +1,4 @@
-//--+ src/main.rs
-
+// === src/main.rs ===
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,6 +12,7 @@ use grab::daemon::routes_write;
 use grab::daemon::state::AppState;
 use grab::registry::RepoRegistry;
 use grab::scanner;
+use tower_http::cors::{Any, CorsLayer};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -115,13 +115,17 @@ async fn main() {
     let state = AppState {
         cache: cache.clone(),
         registry: registry.clone(),
-        config: Arc::new(ScanConfig::default()),
+        request_log: log_buffer,
         central_dir: central_dir.clone(),
         daemon_port: args.port,
         max_width: args.max_width,
         no_format: args.no_format,
-        log_buffer,
     };
+
+    let cors = CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods(Any)
+        .allow_headers(Any);
 
     let app = axum::Router::new()
         // Dashboard routes
@@ -131,15 +135,20 @@ async fn main() {
         // Read routes
         .route("/skeleton", get(routes_read::get_skeleton))
         .route("/catalog", get(routes_read::get_catalog))
-        .route("/info/:hash", get(routes_read::get_body_info)) // ← :hash
+        .route("/info/:hash", get(routes_read::get_body_info))
         .route("/file-info/*path", get(routes_read::get_file_info))
         .route("/file/*path", get(routes_read::get_file))
-        .route("/:hash", get(routes_read::get_body)) // ← :hash
+        .route("/:hash", get(routes_read::get_body))
         // Write/Sync routes
         .route("/repos", get(routes_write::get_repos))
         .route("/repos", post(routes_write::post_repo_add))
-        .route("/repos/:id", delete(routes_write::delete_repo)) // ← :id
+        .route("/repos/:id", delete(routes_write::delete_repo))
         .route("/sync", post(routes_write::post_sync))
+        .layer(cors)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            routes_read::request_logging_middleware,
+        ))
         .with_state(state);
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], args.port));

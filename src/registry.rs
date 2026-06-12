@@ -5,6 +5,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RepoInfo {
+    pub id: String,
+    pub source_path: String,        // It's a String, not PathBuf
+    pub git_branch: Option<String>, // Changed to Option<String>
+    pub file_count: Option<usize>,  // Changed to Option<usize>
+    pub active: bool,               // Added
+    pub last_sync: Option<String>,  // Added
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RepoEntry {
     /// Short name used as subdirectory in central dir (e.g., "core", "api")
     pub id: String,

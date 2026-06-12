@@ -1,3 +1,4 @@
+// === src/daemon/routes_write.rs ===
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -77,7 +78,7 @@ pub async fn post_repo_add(
         );
     }
 
-    // NEW: check if source path is already registered under a different repo ID
+    // check if source path is already registered under a different repo ID
     {
         let reg = state.registry.lock().await;
         for (existing_id, entry) in &reg.repos {

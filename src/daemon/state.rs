@@ -1,29 +1,26 @@
-use serde::Serialize;
-use std::path::PathBuf;
+// === src/daemon/state.rs ===
+pub use crate::registry::RepoRegistry;
+use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::cache::DaemonCache;
-use crate::config::ScanConfig;
-use crate::registry::RepoRegistry;
-
-#[derive(Serialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct RequestLog {
-    pub timestamp: u64,
     pub method: String,
     pub path: String,
     pub status: u16,
+    pub timestamp: String,
+    pub duration_ms: u64,
     pub user_agent: String,
 }
 
 #[derive(Clone)]
 pub struct AppState {
-    pub cache: Arc<Mutex<DaemonCache>>,
-    pub registry: Arc<Mutex<RepoRegistry>>,
-    pub config: Arc<ScanConfig>,
-    pub central_dir: PathBuf,
+    pub cache: Arc<Mutex<crate::cache::DaemonCache>>,
+    pub registry: Arc<tokio::sync::Mutex<RepoRegistry>>,
+    pub request_log: Arc<Mutex<Vec<RequestLog>>>,
+    pub central_dir: std::path::PathBuf,
     pub daemon_port: u16,
-    pub max_width: i32,
     pub no_format: bool,
-    pub log_buffer: Arc<Mutex<Vec<RequestLog>>>,
+    pub max_width: i32,
 }
