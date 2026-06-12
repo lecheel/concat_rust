@@ -1,4 +1,3 @@
-// === src/main.rs ===
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -147,7 +146,7 @@ async fn main() {
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
-            routes_read::request_logging_middleware,
+            routes_read::log_middleware,
         ))
         .with_state(state);
 

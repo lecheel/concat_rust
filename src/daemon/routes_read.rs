@@ -274,8 +274,22 @@ pub async fn get_body_info(Path(prefix): Path<String>, State(state): State<AppSt
 pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppState>) -> Response {
     let db = state.cache.lock().await;
     let repo_ids = collect_repo_ids(&state).await;
+
+    let mut file_entry = db.files.get(&path);
+    let mut actual_path = path.clone();
+
     if path.ends_with(".rs") {
-        if let Some(entry) = db.files.get(&path) {
+        if file_entry.is_none() {
+            for repo in &repo_ids {
+                let candidate = format!("{}/{}", repo, path);
+                if db.files.contains_key(&candidate) {
+                    file_entry = db.files.get(&candidate);
+                    actual_path = candidate;
+                    break;
+                }
+            }
+        }
+        if let Some(entry) = file_entry {
             let body_infos: Vec<BodyInfoResponse> = entry
                 .body_hashes
                 .iter()
@@ -289,7 +303,7 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
                 })
                 .collect();
             let resp = FileInfoResponse {
-                filepath: strip_repo_prefix(&path, &repo_ids),
+                filepath: strip_repo_prefix(&actual_path, &repo_ids),
                 loc: entry.loc,
                 byte_size: entry.byte_size,
                 body_hashes: body_infos,
@@ -318,8 +332,17 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
         );
     }
     // Non-Rust file: serve from central_dir
-    let full_path = state.central_dir.join(&path);
+    let mut full_path = state.central_dir.join(&path);
     if !full_path.starts_with(&state.central_dir) || !full_path.exists() {
+        for repo in &repo_ids {
+            let candidate_path = state.central_dir.join(repo).join(&path);
+            if candidate_path.exists() && candidate_path.starts_with(&state.central_dir) {
+                full_path = candidate_path;
+                break;
+            }
+        }
+    }
+    if !full_path.exists() {
         return build_response(
             StatusCode::NOT_FOUND,
             vec![],
@@ -363,7 +386,20 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
     let display_path = strip_repo_prefix(&path, &repo_ids);
     if path.ends_with(".rs") {
         let db = state.cache.lock().await;
-        if let Some(entry) = db.files.get(&path) {
+        let mut file_entry = db.files.get(&path);
+        let mut actual_path = path.clone();
+
+        if file_entry.is_none() {
+            for repo in &repo_ids {
+                let candidate = format!("{}/{}", repo, path);
+                if db.files.contains_key(&candidate) {
+                    file_entry = db.files.get(&candidate);
+                    actual_path = candidate;
+                    break;
+                }
+            }
+        }
+        if let Some(entry) = file_entry {
             return build_response(
                 StatusCode::OK,
                 vec![
@@ -371,9 +407,13 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
                     ("x-loc", entry.loc.to_string()),
                     ("x-byte-size", entry.byte_size.to_string()),
                     ("x-source", "cache".to_string()),
-                    ("x-filepath", display_path.clone()),
+                    ("x-filepath", strip_repo_prefix(&actual_path, &repo_ids)),
                 ],
-                format!("//--+ file:///{}\n{}", display_path, entry.code),
+                format!(
+                    "//--+ file:///{}\n{}",
+                    strip_repo_prefix(&actual_path, &repo_ids),
+                    entry.code
+                ),
             );
         }
         return build_response(
@@ -382,8 +422,18 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
             "Rust file not indexed yet. Run sync first.".to_string(),
         );
     }
-    let full_path = state.central_dir.join(&path);
+    // Non-Rust file
+    let mut full_path = state.central_dir.join(&path);
     if !full_path.starts_with(&state.central_dir) || !full_path.exists() {
+        for repo in &repo_ids {
+            let candidate_path = state.central_dir.join(repo).join(&path);
+            if candidate_path.exists() && candidate_path.starts_with(&state.central_dir) {
+                full_path = candidate_path;
+                break;
+            }
+        }
+    }
+    if !full_path.exists() {
         return build_response(
             StatusCode::NOT_FOUND,
             vec![],
@@ -875,7 +925,8 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
             try {
                 const res = await fetch('/logs');
                 if (!res.ok) throw new Error('Logs offline');
-                const logs = await res.json();
+                const data = await res.json();
+                const logs = data.logs || [];
                 const container = document.getElementById('logs-list');
                 container.innerHTML = '';
 
@@ -1178,7 +1229,7 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
                     document.getElementById('code-viewer-title').innerText = `Scope context: ${info.filepath}`;
                 } else {
                     document.getElementById('meta-title').innerText = `Hashes: ${query}`;
-                    document.getElementById('meta-subtitle').innerText = `Multiple hash definitions found (${infos.length})`;
+                    document.getElementById('meta-subtitle').innerText = `Multiple hash definitions found (${typeInfos.length})`;
                     document.getElementById('code-viewer-title').innerText = `Combined Context`;
                 }
 
