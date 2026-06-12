@@ -13,6 +13,11 @@ Most real-world Rust codebases are too large for free-tier web-based AI chats (s
 2. An **on-demand retrieval daemon** that lets you fetch and paste exact implementations (either raw files or specific AST bodies) only when the model requests them.
 
 ---
+![image](./concat3.png)
+![image](./concat2.png)
+![image](./concat4.png)
+![image](./concat5.png)
+---
 
 ## Key Features in v2
 
@@ -62,6 +67,26 @@ Most real-world Rust codebases are too large for free-tier web-based AI chats (s
    fn process_order(order: &Order) -> Result<Receipt, Error> { /* HASH:a1b2c3d4e5f6 [8 LOC] */ }
    ```
 2. **Retrieve on Demand**: The model reviews the skeleton structure and asks for specific files or block hashes. You run the CLI or use the Web Dashboard to fetch them instantly.
+
+---
+
+## Why This Helps Free-Tier Users
+
+Free-tier web interfaces for AI models often impose tight constraints on both context window size and the number of messages allowed per session. This tool helps optimize both constraints:
+
+| Problem in Free-Tier Web Chats | How `concat_rust` Addresses It |
+| :--- | :--- |
+| **Small Context Windows** | The skeleton is typically 5–15% of the original codebase size, fitting easily within standard limits. |
+| **Strict Message Limits** | Sharing the entire architecture upfront reduces the need for back-and-forth clarification, saving your daily message quota. |
+| **Tedious Manual Pasting** | The CLI copies code directly to your clipboard, and the Chrome extension pastes it directly into the chat interface. |
+| **Out-of-Context Hallucinations** | Because the model can see all trait bounds and type definitions in the skeleton, it is less likely to guess or invent non-existent APIs. |
+| **Performance Degradation** | Keeping the active context small and highly relevant helps the model provide more focused and accurate code generations. |
+
+### Typical Compression Ratio Example
+
+* **Original Project**: ~12,400 lines of code (~52,000 tokens) — *often exceeds practical free-tier context limits.*
+* **Skeleton**: ~1,800 lines of code (~7,500 tokens) — *well within typical free-tier limits.*
+* **Per-Fetch Body**: ~50–200 lines (~200–800 tokens) — *minimal token overhead for targeted updates.*
 
 ---
 
