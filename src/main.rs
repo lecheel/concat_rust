@@ -41,6 +41,11 @@ struct Args {
     cache: String,
 }
 
+async fn get_meta_prompt(axum::extract::State(state): axum::extract::State<AppState>) -> String {
+    let db = state.cache.lock().await;
+    db.effective_meta_prompt()
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -134,6 +139,7 @@ async fn main() {
         .route("/logs", get(routes_read::get_logs))
         // Read routes
         .route("/skeleton", get(routes_read::get_skeleton))
+        .route("/meta-prompt", get(get_meta_prompt))
         .route("/catalog", get(routes_read::get_catalog))
         .route("/info/:hash", get(routes_read::get_body_info))
         .route("/file-info/*path", get(routes_read::get_file_info))

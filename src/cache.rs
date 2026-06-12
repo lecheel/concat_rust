@@ -2,6 +2,23 @@ use crate::fingerprint::FileFingerprint;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+pub const DEFAULT_META_PROMPT: &str = "\n===\n\
+     Your process:\n\
+     Analyze the feature requirements and determine which files, structs, traits, \
+     and functions you need to see the full implementation of.\n\
+     Prefer asking for whole files rather than individual hashes.\n\
+     If a file is too large, ask for specific impl blocks or struct definitions by their HASH.\n\
+     List exactly what you need in a clear, numbered list. For each item, include:\n\
+     - The file path as shown in the skeleton header (e.g., src/main.rs).\n\
+     - If you need a specific block, include its HASH (e.g., /* HASH:1a12fb93 [183 LOC] */).\n\
+     - A brief reason (e.g., “to know the fields of AppState”, “to see how sync is implemented”).\n\
+     please ASKing like this in single for all\n\
+     cli <path1> <path2> hash1 hash2         → fetch all in once\n\
+     \n\
+     Do not guess or stub missing implementations.\n\
+     Do not proceed until you have received all requested code.\n\
+     ===";
+
 /// Strips a known repo-id prefix from a path (e.g., "grab/src/main.rs" → "src/main.rs").
 /// If no known repo prefix matches, returns the path unchanged.
 pub fn strip_repo_prefix(path: &str, repo_ids: &[String]) -> String {
@@ -112,6 +129,15 @@ impl DaemonCache {
         parts.join("\n")
     }
 
+    /// Returns the custom `meta_prompt` if configured, or falls back to the static default.
+    pub fn effective_meta_prompt(&self) -> String {
+        if !self.meta_prompt.is_empty() {
+            self.meta_prompt.clone()
+        } else {
+            DEFAULT_META_PROMPT.to_string()
+        }
+    }
+
     pub fn assemble_full_skeleton_response(
         &self,
         _daemon_port: u16,
@@ -125,28 +151,7 @@ impl DaemonCache {
             Some(repo_param)
         };
         let skeleton = self.assemble_skeleton_for_repos(repo_filter, repo_ids);
-        let meta_prompt = format!(
-            "\n\n===\n\
-             Your process:\n\
-             Analyze the feature requirements and determine which files, structs, traits, \
-             and functions you need to see the full implementation of.\n\
-             Prefer asking for whole files rather than individual hashes.\n\
-             If a file is too large, ask for specific impl blocks or struct definitions by their HASH.\n\
-             List exactly what you need in a clear, numbered list. For each item, include:\n\
-             - The file path as shown in the skeleton header (e.g., src/main.rs).\n\
-             - If you need a specific block, include its HASH (e.g., /* HASH:1a12fb93 [183 LOC] */).\n\
-             - A brief reason (e.g., “to know the fields of AppState”, “to see how sync is implemented”).\n\
-             \n\
-             CLI commands (use these to fetch code and ##TODO asking in single line):\n\
-             cli --skeleton          → full skeleton\n\
-             cli <path> <path>       → fetch whole files using the path shown in the skeleton (e.g., src/main.rs, src/daemon/mod.rs)\n\
-             cli hash1 hash2         → fetch specific bodies\n\
-             cli <path1> <path2> hash1 hash2         → fetch all in once\n\
-             \n\
-             Do not guess or stub missing implementations.\n\
-             Do not proceed until you have received all requested code.\n\
-             ==="
-        );
+        let meta_prompt = self.effective_meta_prompt();
         format!("{}{}{}", header, skeleton, meta_prompt)
     }
 }

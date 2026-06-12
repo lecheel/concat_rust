@@ -1,7 +1,3 @@
-// === src/bin/cli.rs ===
-// CHANGES: Added has_repo_prefix(), updated resolve_path to detect existing repo prefixes,
-// updated cmd_file/cmd_use to show clean display paths, updated resolve message
-
 use arboard::Clipboard;
 use clap::{Parser, Subcommand};
 
@@ -57,6 +53,16 @@ enum Commands {
         target: String,
         #[arg(long)]
         file: bool,
+    },
+    /// Retrieve the instruction meta-prompt
+    #[command(alias = "p")]
+    Prompt {
+        /// Write the prompt to this file instead of copying to clipboard.
+        /// Parent directories are created automatically.
+        #[arg(short = 'o', long, value_name = "PATH")]
+        output: Option<String>,
+        /// Optional problem description or instruction to append to the prompt
+        instruction: Option<String>,
     },
 }
 
@@ -212,33 +218,6 @@ fn set_active_repo(repo: &str) {
     let _ = std::fs::write(active_repo_path(), repo);
 }
 
-fn copy_to_clipboard(content: &str, warn_loc: usize, summaries: &[String]) {
-    let total_loc = content.lines().count();
-    if total_loc > warn_loc {
-        eprintln!(
-            "⚠️  WARNING: About to copy {} LOC (threshold: {})",
-            total_loc, warn_loc
-        );
-        for s in summaries {
-            eprintln!("  - {}", s);
-        }
-        eprintln!("  Waiting 3s... (Ctrl+C to abort)");
-        std::thread::sleep(std::time::Duration::from_secs(3));
-    }
-    match Clipboard::new().and_then(|mut cb| cb.set_text(content)) {
-        Ok(_) => {
-            println!("✅ Copied {} LOC to clipboard:", total_loc);
-            for s in summaries {
-                println!("  - {}", s);
-            }
-        }
-        Err(e) => {
-            eprintln!("⚠️  Clipboard failed: {}. Printing to stdout:\n", e);
-            println!("{}", content);
-        }
-    }
-}
-
 fn cmd_use(repo_id: &str, base: &str) {
     if repo_id == "none" {
         set_active_repo("none");
@@ -349,6 +328,76 @@ fn cmd_sync(_repo: Option<&str>, base: &str) {
     match post_text(&url) {
         Ok(msg) => println!("🔄 {}", msg),
         Err(e) => eprintln!("❌ {}", e),
+    }
+}
+
+fn cmd_prompt(base: &str, warn_loc: usize, output: Option<&str>, instruction: Option<&str>) {
+    let url = format!("{}/meta-prompt", base);
+    match fetch_text(&url) {
+        Ok(body) => {
+            let mut final_content = body;
+            if let Some(inst) = instruction {
+                let trimmed = inst.trim();
+                if !trimmed.is_empty() {
+                    final_content = format!("{}{}", trimmed, final_content);
+                }
+            }
+
+            let loc = final_content.lines().count();
+
+            if let Some(path_str) = output {
+                let path = std::path::Path::new(path_str);
+
+                if let Some(parent) = path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        if let Err(e) = std::fs::create_dir_all(parent) {
+                            eprintln!("❌ Failed to create {}: {}", parent.display(), e);
+                            return;
+                        }
+                    }
+                }
+
+                match std::fs::write(path, &final_content) {
+                    Ok(_) => println!("✅ Wrote {} LOC to {}", loc, path.display()),
+                    Err(e) => eprintln!("❌ Failed to write file: {}", e),
+                }
+            } else {
+                // Copy to clipboard. If it succeeds, also print it directly to the terminal.
+                if copy_to_clipboard(&final_content, warn_loc, &[format!("PROMPT [{} LOC]", loc)]) {
+                    println!("\n{}", final_content);
+                }
+            }
+        }
+        Err(e) => eprintln!("❌ {}", e),
+    }
+}
+
+fn copy_to_clipboard(content: &str, warn_loc: usize, summaries: &[String]) -> bool {
+    let total_loc = content.lines().count();
+    if total_loc > warn_loc {
+        eprintln!(
+            "⚠️  WARNING: About to copy {} LOC (threshold: {})",
+            total_loc, warn_loc
+        );
+        for s in summaries {
+            eprintln!("  - {}", s);
+        }
+        eprintln!("  Waiting 3s... (Ctrl+C to abort)");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+    }
+    match Clipboard::new().and_then(|mut cb| cb.set_text(content)) {
+        Ok(_) => {
+            println!("✅ Copied {} LOC to clipboard:", total_loc);
+            for s in summaries {
+                println!("  - {}", s);
+            }
+            true
+        }
+        Err(e) => {
+            eprintln!("⚠️  Clipboard failed: {}. Printing to stdout:\n", e);
+            println!("{}", content);
+            false
+        }
     }
 }
 
@@ -575,5 +624,14 @@ fn main() {
         Commands::File { paths } => cmd_file(&paths, &base, cli.warn_loc),
         Commands::Hash { hashes } => cmd_hash(&hashes, &base, cli.warn_loc),
         Commands::Info { target, file } => cmd_info(&target, file, &base),
+        Commands::Prompt {
+            output,
+            instruction,
+        } => cmd_prompt(
+            &base,
+            cli.warn_loc,
+            output.as_deref(),
+            instruction.as_deref(),
+        ),
     }
 }
