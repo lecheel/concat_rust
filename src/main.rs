@@ -122,6 +122,9 @@ async fn main() {
     };
 
     let app = axum::Router::new()
+        // Dashboard routes
+        .route("/", get(routes_read::get_dashboard))
+        .route("/dashboard", get(routes_read::get_dashboard))
         // Read routes
         .route("/skeleton", get(routes_read::get_skeleton))
         .route("/catalog", get(routes_read::get_catalog))
