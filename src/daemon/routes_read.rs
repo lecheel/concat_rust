@@ -1,8 +1,13 @@
-use super::state::AppState;
+//--+ ./src/daemon/routes_read.rs
+// === src/daemon/routes_read.rs ===
+// Consolidated all imports, removed duplicate get_dashboard and duplicate imports.
+
+use super::state::{AppState, RequestLog};
 use crate::cache::strip_repo_prefix;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, Request, State},
     http::{HeaderValue, StatusCode},
+    middleware::Next,
     response::{IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -296,8 +301,6 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
     }
 }
 
-// === src/daemon/routes_read.rs — get_file function, two fixes ===
-
 pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -> Response {
     let repo_ids = collect_repo_ids(&state).await;
     let display_path = strip_repo_prefix(&path, &repo_ids);
@@ -311,7 +314,7 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
                     ("x-loc", entry.loc.to_string()),
                     ("x-byte-size", entry.byte_size.to_string()),
                     ("x-source", "cache".to_string()),
-                    ("x-filepath", display_path.clone()), // <-- .clone() added
+                    ("x-filepath", display_path.clone()),
                 ],
                 format!("//--+ file:///{}\n{}", display_path, entry.code),
             );
@@ -349,7 +352,7 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
                     ("x-loc", loc.to_string()),
                     ("x-byte-size", content.len().to_string()),
                     ("x-source", "disk".to_string()),
-                    ("x-filepath", display_path.clone()), // <-- .clone() added
+                    ("x-filepath", display_path.clone()),
                 ],
                 format!("//--+ file:///{}\n{}", display_path, content),
             )
@@ -495,7 +498,66 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
     )
 }
 
-/// GET /dashboard and GET /
+/// GET /logs
+pub async fn get_logs(State(state): State<AppState>) -> Response {
+    let logs = state.log_buffer.lock().await;
+    match serde_json::to_string_pretty(&*logs) {
+        Ok(json) => build_response(
+            StatusCode::OK,
+            vec![("content-type", "application/json".to_string())],
+            json,
+        ),
+        Err(e) => build_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            vec![],
+            format!("{{\"error\": \"{}\"}}", e),
+        ),
+    }
+}
+
+/// Middleware to log non-log-view HTTP requests
+pub async fn log_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    let method = req.method().to_string();
+    let uri = req.uri().clone();
+    let path = uri.path().to_string();
+
+    let user_agent = req
+        .headers()
+        .get(axum::http::header::USER_AGENT)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    let is_log_req = path == "/logs" || path == "/dashboard" || path == "/";
+
+    let response = next.run(req).await;
+
+    if !is_log_req {
+        let status = response.status().as_u16();
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+
+        let log_entry = RequestLog {
+            timestamp,
+            method,
+            path,
+            status,
+            user_agent,
+        };
+
+        let mut logs = state.log_buffer.lock().await;
+        logs.push(log_entry);
+        if logs.len() > 200 {
+            logs.remove(0);
+        }
+    }
+
+    response
+}
+
+/// GET /dashboard
 pub async fn get_dashboard() -> Response {
     build_response(
         StatusCode::OK,
@@ -552,19 +614,19 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 
     <!-- Main Workspace -->
     <main class="flex-1 flex overflow-hidden">
-        <!-- Sidebar (Repositories and Catalog) -->
+        <!-- Sidebar (Tabs: Repos, Catalog, Activity Logs) -->
         <div class="w-96 border-r border-slate-800 bg-slate-900/40 flex flex-col overflow-hidden shrink-0">
             <!-- Tabs Header -->
             <div class="flex border-b border-slate-800 shrink-0">
-                <button onclick="switchTab('repos')" id="tab-btn-repos" class="flex-1 py-3 text-sm font-semibold border-b-2 border-indigo-500 text-white transition">Repositories</button>
-                <button onclick="switchTab('catalog')" id="tab-btn-catalog" class="flex-1 py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition">File Catalog</button>
+                <button onclick="switchTab('repos')" id="tab-btn-repos" class="flex-1 py-3 text-xs font-semibold border-b-2 border-indigo-500 text-white transition">Repos</button>
+                <button onclick="switchTab('catalog')" id="tab-btn-catalog" class="flex-1 py-3 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition">Catalog</button>
+                <button onclick="switchTab('logs')" id="tab-btn-logs" class="flex-1 py-3 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition">Activity Logs</button>
             </div>
 
             <!-- Tab Content Area -->
             <div class="flex-1 overflow-y-auto p-4 space-y-4">
                 <!-- REPOS TAB -->
                 <div id="tab-content-repos" class="space-y-4">
-                    <!-- Add Repo Card -->
                     <div class="bg-slate-900/80 rounded-lg p-4 border border-slate-800 space-y-3 shadow-inner">
                         <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Add Git Repository</h3>
                         <form id="add-repo-form" onsubmit="handleAddRepo(event)" class="space-y-2.5">
@@ -582,12 +644,9 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
                         </form>
                     </div>
 
-                    <!-- Active Repos List -->
                     <div class="space-y-3">
                         <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 px-1">Registered Mirror Repos</h3>
-                        <div id="repos-list" class="space-y-2">
-                            <!-- Dynamic Repos -->
-                        </div>
+                        <div id="repos-list" class="space-y-2"></div>
                     </div>
                 </div>
 
@@ -596,9 +655,16 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
                     <div class="sticky top-0 bg-slate-950/90 py-1 shrink-0">
                         <input type="text" id="catalog-search" oninput="filterCatalog()" placeholder="Search catalog paths..." class="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-xs focus:outline-none focus:border-indigo-500 text-slate-200">
                     </div>
-                    <div id="catalog-list" class="space-y-1.5">
-                        <!-- Dynamic Files -->
+                    <div id="catalog-list" class="space-y-1.5"></div>
+                </div>
+
+                <!-- ACTIVITY LOGS TAB -->
+                <div id="tab-content-logs" class="hidden space-y-3">
+                    <div class="flex items-center justify-between px-1">
+                        <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400">Daemon Activity Logs</h3>
+                        <span class="text-[9px] bg-indigo-950 text-indigo-400 border border-indigo-900 rounded px-1.5 py-0.5 font-semibold">Auto-refresh (2s)</span>
                     </div>
+                    <div id="logs-list" class="space-y-2"></div>
                 </div>
             </div>
         </div>
@@ -619,7 +685,6 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
 
             <!-- Inspection Output Viewport -->
             <div class="flex-1 flex overflow-hidden">
-                <!-- Main details & code area -->
                 <div class="flex-1 flex flex-col overflow-hidden p-6 space-y-4">
                     <div id="metadata-header" class="hidden shrink-0 bg-slate-900/40 border border-slate-800/80 rounded-lg p-4 flex items-center justify-between">
                         <div class="space-y-1">
@@ -634,7 +699,7 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
                         </div>
                     </div>
 
-                    <!-- Code block / interactive viewer -->
+                    <!-- Code block viewer -->
                     <div class="flex-1 bg-slate-900/20 border border-slate-800 rounded-lg overflow-hidden flex flex-col">
                         <div class="bg-slate-900/60 border-b border-slate-800 px-4 py-2 flex items-center justify-between text-xs text-slate-400 shrink-0 font-medium">
                             <span id="code-viewer-title">No content selected</span>
@@ -652,20 +717,19 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
                         <h3 class="text-xs font-bold uppercase tracking-wider text-indigo-400">Extracted AST Code Bodies</h3>
                         <p class="text-[10px] text-slate-500 mt-1">Rust elements with unique stable hashes. Click a hash to isolate its implementation.</p>
                     </div>
-                    <div id="file-hashes-list" class="flex-1 overflow-y-auto p-4 space-y-2">
-                        <!-- Dynamic Hashes -->
-                    </div>
+                    <div id="file-hashes-list" class="flex-1 overflow-y-auto p-4 space-y-2"></div>
                 </div>
             </div>
         </div>
     </main>
 
-    <!-- Toasts -->
+    <!-- Message Toasts -->
     <div id="toast-container" class="fixed bottom-4 right-4 z-50 space-y-2"></div>
 
     <script>
         let currentTab = 'repos';
         let loadedCatalogData = [];
+        let logInterval = null;
 
         function escapeHtml(text) {
             return text
@@ -687,33 +751,110 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
             toast.innerHTML = `<span>${isError ? '❌' : '✅'}</span><span>${message}</span>`;
             container.appendChild(toast);
             
-            setTimeout(() => {
-                toast.classList.remove('translate-y-2', 'opacity-0');
-            }, 10);
-            
+            setTimeout(() => toast.classList.remove('translate-y-2', 'opacity-0'), 10);
             setTimeout(() => {
                 toast.classList.add('opacity-0', 'translate-y-2');
                 setTimeout(() => toast.remove(), 300);
             }, 4000);
         }
 
+        function getClientLabel(ua) {
+            if (!ua) return 'Unknown Client';
+            if (ua.includes('reqwest') || ua.includes('concat_rust_cli')) {
+                return '💻 Concat CLI';
+            }
+            if (ua.includes('Mozilla') || ua.includes('Chrome') || ua.includes('Safari')) {
+                return '🌐 Web Dashboard';
+            }
+            return ua;
+        }
+
         function switchTab(tab) {
             currentTab = tab;
+            
+            if (tab === 'logs') {
+                startLogPolling();
+            } else {
+                stopLogPolling();
+            }
+
             document.getElementById('tab-btn-repos').className = tab === 'repos' 
-                ? 'flex-1 py-3 text-sm font-semibold border-b-2 border-indigo-500 text-white transition' 
-                : 'flex-1 py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition';
+                ? 'flex-1 py-3 text-xs font-semibold border-b-2 border-indigo-500 text-white transition' 
+                : 'flex-1 py-3 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition';
             
             document.getElementById('tab-btn-catalog').className = tab === 'catalog' 
-                ? 'flex-1 py-3 text-sm font-semibold border-b-2 border-indigo-500 text-white transition' 
-                : 'flex-1 py-3 text-sm font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition';
+                ? 'flex-1 py-3 text-xs font-semibold border-b-2 border-indigo-500 text-white transition' 
+                : 'flex-1 py-3 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition';
+
+            document.getElementById('tab-btn-logs').className = tab === 'logs' 
+                ? 'flex-1 py-3 text-xs font-semibold border-b-2 border-indigo-500 text-white transition' 
+                : 'flex-1 py-3 text-xs font-semibold border-b-2 border-transparent text-slate-400 hover:text-slate-200 transition';
 
             if (tab === 'repos') {
                 document.getElementById('tab-content-repos').classList.remove('hidden');
                 document.getElementById('tab-content-catalog').classList.add('hidden');
-            } else {
+                document.getElementById('tab-content-logs').classList.add('hidden');
+            } else if (tab === 'catalog') {
                 document.getElementById('tab-content-repos').classList.add('hidden');
                 document.getElementById('tab-content-catalog').classList.remove('hidden');
+                document.getElementById('tab-content-logs').classList.add('hidden');
                 loadCatalog();
+            } else if (tab === 'logs') {
+                document.getElementById('tab-content-repos').classList.add('hidden');
+                document.getElementById('tab-content-catalog').classList.add('hidden');
+                document.getElementById('tab-content-logs').classList.remove('hidden');
+            }
+        }
+
+        async function loadLogs() {
+            try {
+                const res = await fetch('/logs');
+                if (!res.ok) throw new Error('Logs offline');
+                const logs = await res.json();
+                const container = document.getElementById('logs-list');
+                container.innerHTML = '';
+
+                if (logs.length === 0) {
+                    container.innerHTML = `<div class="text-center py-6 text-xs text-slate-500 font-sans">No client connections received yet. Run terminal commands to trigger request logs.</div>`;
+                    return;
+                }
+
+                logs.reverse().forEach(log => {
+                    const timeStr = new Date(log.timestamp * 1000).toLocaleTimeString();
+                    const isSuccess = log.status >= 200 && log.status < 300;
+                    const statusColor = isSuccess ? 'text-emerald-400 bg-emerald-950/40 border-emerald-800/40' : 'text-red-400 bg-red-950/40 border-red-800/40';
+                    const clientLabel = getClientLabel(log.user_agent);
+
+                    const item = document.createElement('div');
+                    item.className = 'p-2 bg-slate-900 border border-slate-800/60 rounded flex flex-col space-y-1.5 transition';
+                    item.innerHTML = `
+                        <div class="flex justify-between items-center text-[10px] text-slate-500 font-sans">
+                            <span>${timeStr}</span>
+                            <span class="truncate font-semibold text-slate-400" title="${log.user_agent}">${clientLabel}</span>
+                        </div>
+                        <div class="flex items-center space-x-1.5 pt-0.5">
+                            <span class="px-1.5 py-0.5 rounded text-[10px] border font-bold ${statusColor}">${log.status}</span>
+                            <span class="text-slate-300 truncate font-mono text-[10px]" title="${log.path}">${log.method} ${log.path}</span>
+                        </div>
+                    `;
+                    container.appendChild(item);
+                });
+            } catch (err) {
+                console.error('Log sync failed:', err);
+            }
+        }
+
+        function startLogPolling() {
+            if (!logInterval) {
+                loadLogs();
+                logInterval = setInterval(loadLogs, 2000);
+            }
+        }
+
+        function stopLogPolling() {
+            if (logInterval) {
+                clearInterval(logInterval);
+                logInterval = null;
             }
         }
 
@@ -726,7 +867,7 @@ const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
                 list.innerHTML = '';
                 
                 if (repos.length === 0) {
-                    list.innerHTML = `<div class="text-center py-6 text-xs text-slate-500">No repositories registered. Use the form above.</div>`;
+                    list.innerHTML = `<div class="text-center py-6 text-xs text-slate-500">No repositories registered yet. Use the form above.</div>`;
                     return;
                 }
 

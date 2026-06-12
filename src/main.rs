@@ -62,6 +62,7 @@ async fn main() {
 
     let registry = Arc::new(Mutex::new(registry));
     let cache = Arc::new(Mutex::new(cache));
+    let log_buffer = Arc::new(Mutex::new(Vec::new()));
 
     // ── Initial Index (only if central dir already has files) ──
     let has_repos = !registry.lock().await.repos.is_empty();
@@ -119,12 +120,14 @@ async fn main() {
         daemon_port: args.port,
         max_width: args.max_width,
         no_format: args.no_format,
+        log_buffer,
     };
 
     let app = axum::Router::new()
         // Dashboard routes
         .route("/", get(routes_read::get_dashboard))
         .route("/dashboard", get(routes_read::get_dashboard))
+        .route("/logs", get(routes_read::get_logs))
         // Read routes
         .route("/skeleton", get(routes_read::get_skeleton))
         .route("/catalog", get(routes_read::get_catalog))
