@@ -1,3 +1,4 @@
+// === src/main.rs ===
 use clap::Parser;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -143,6 +144,7 @@ async fn main() {
         .route("/repos", post(routes_write::post_repo_add))
         .route("/repos/:id", delete(routes_write::delete_repo))
         .route("/sync", post(routes_write::post_sync))
+        .route("/stats", get(routes_read::get_stats))
         .layer(cors)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

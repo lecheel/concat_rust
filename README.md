@@ -20,6 +20,7 @@ This minimizes token consumption, preserves your daily message allowance, and pr
 ![image](./concat3.png)
 ![image](./concat2.png)
 ![image](./concat4.png)
+![image](./concat5.png)
 
 
 ## How It Works

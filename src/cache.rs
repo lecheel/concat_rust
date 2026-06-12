@@ -49,6 +49,10 @@ pub struct DaemonCache {
     pub meta_prompt: String,
     #[serde(default)]
     pub generation: u64,
+    #[serde(default)]
+    pub file_hits: HashMap<String, u64>,
+    #[serde(default)]
+    pub hash_hits: HashMap<String, u64>,
     #[serde(skip)]
     pub cache_path: String,
 }
@@ -71,10 +75,12 @@ impl DaemonCache {
         if let Some(old_entry) = self.files.remove(path) {
             for hash in &old_entry.body_hashes {
                 self.bodies.remove(hash);
+                self.hash_hits.remove(hash);
             }
         }
         self.skeleton_segments.remove(path);
         self.file_order.retain(|p| p != path);
+        self.file_hits.remove(path);
     }
 
     pub fn assemble_skeleton_for_repos(
