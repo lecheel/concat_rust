@@ -28,8 +28,8 @@ struct Args {
     #[arg(long, default_value_t = 7890)]
     port: u16,
 
-    /// Skip rustfmt (use if indexing hangs)
-    #[arg(long)]
+    /// Skip rustfmt (default: true, use --no-format=false to enable formatting)
+    #[arg(long, default_value_t = true)]
     no_format: bool,
 
     /// rustfmt max width

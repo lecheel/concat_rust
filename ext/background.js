@@ -125,6 +125,8 @@ async function fetchAndPaste(host, port, paramsStr) {
   }
 }
 
+// In background.js
+
 function pasteAndCopyToClipboardInPage(textToPaste) {
   navigator.clipboard.writeText(textToPaste).catch(err => {
     console.warn('System clipboard write failed:', err);
@@ -148,6 +150,7 @@ function pasteAndCopyToClipboardInPage(textToPaste) {
 
   target.focus();
 
+  // Handle standard Textareas and Inputs
   if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
     const start = target.selectionStart;
     const end   = target.selectionEnd;
@@ -155,19 +158,39 @@ function pasteAndCopyToClipboardInPage(textToPaste) {
     target.value = value.slice(0, start) + textToPaste + value.slice(end);
     target.dispatchEvent(new Event('input', { bubbles: true }));
     target.setSelectionRange(start + textToPaste.length, start + textToPaste.length);
+  
+  // Handle ContentEditable (LLM Inputs, Web Editors)
   } else if (target.isContentEditable) {
-    target.focus();
-    const selection = window.getSelection();
-    if (selection.rangeCount) {
-      const range = selection.getRangeAt(0);
-      range.deleteContents();
-      range.insertNode(document.createTextNode(textToPaste));
-      range.collapse(false);
-      selection.removeAllRanges();
-      selection.addRange(range);
-    } else {
-      target.innerText += textToPaste;
+    // Using execCommand('insertText') is the most reliable way to insert text
+    // into contenteditable elements while preserving newlines as visual line breaks.
+    const success = document.execCommand('insertText', false, textToPaste);
+    
+    if (!success) {
+      // Fallback for very specific environments where execCommand is disabled
+      // This manually splits lines and adds <br> tags
+      const selection = window.getSelection();
+      if (selection.rangeCount) {
+        const range = selection.getRangeAt(0);
+        range.deleteContents();
+        
+        // Split by newline and join with <br> to ensure visual line breaks
+        const fragment = document.createDocumentFragment();
+        const lines = textToPaste.split('\n');
+        
+        lines.forEach((line, index) => {
+          fragment.appendChild(document.createTextNode(line));
+          if (index < lines.length - 1) {
+            fragment.appendChild(document.createElement('br'));
+          }
+        });
+        
+        range.insertNode(fragment);
+        range.collapse(false);
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
     }
+    // Dispatch input event to trigger any listeners (like autosize or auto-send)
     target.dispatchEvent(new Event('input', { bubbles: true }));
   }
 }

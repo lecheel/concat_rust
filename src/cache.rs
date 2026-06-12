@@ -108,28 +108,11 @@ impl DaemonCache {
 
     pub fn assemble_full_skeleton_response(
         &self,
-        daemon_port: u16,
+        _daemon_port: u16,
         repo_param: &str,
         repo_ids: &[String],
     ) -> String {
-        let header = format!(
-            "// === SKELETON MODE (COMPRESSED) ===\n\
-             // Hash fetch:     http://localhost:{}/<HASH>\n\
-             // Multi-hash:     http://localhost:{}/<HASH1>+<HASH2>\n\
-             // Whole file:     http://localhost:{}/file/<PATH>\n\
-             // Skeleton:       http://localhost:{}/skeleton\n\
-             // Catalog:        http://localhost:{}/catalog\n\
-             // Body info:      http://localhost:{}/info/<HASH>\n\
-             // File info:      http://localhost:{}/file-info/<PATH>\n\
-             // ===================================\n\n",
-            daemon_port,
-            daemon_port,
-            daemon_port,
-            daemon_port,
-            daemon_port,
-            daemon_port,
-            daemon_port
-        );
+        let header = format!("// === SKELETON MODE (COMPRESSED) ===");
         let repo_filter = if repo_param == "all" {
             None
         } else {
@@ -148,12 +131,12 @@ impl DaemonCache {
              - If you need a specific block, include its HASH (e.g., /* HASH:1a12fb93 [183 LOC] */).\n\
              - A brief reason (e.g., “to know the fields of AppState”, “to see how sync is implemented”).\n\
              \n\
-             CLI commands (use these to fetch code):\n\
+             CLI commands (use these to fetch code and ##TODO asking in single line):\n\
              cli --skeleton          → full skeleton\n\
-             cli <PATH> <PATH>       → fetch whole files using the path shown in the skeleton (e.g., src/main.rs, src/daemon/mod.rs)\n\
-             cli HASH1 HASH2         → fetch specific bodies\n\
+             cli <path> <path>       → fetch whole files using the path shown in the skeleton (e.g., src/main.rs, src/daemon/mod.rs)\n\
+             cli hash1 hash2         → fetch specific bodies\n\
+             cli <path1> <path2> hash1 hash2         → fetch all in once\n\
              \n\
-             ## asking via this format cli file1 file2 hash1 hash ... ## \n\
              Do not guess or stub missing implementations.\n\
              Do not proceed until you have received all requested code.\n\
              ==="

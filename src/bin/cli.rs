@@ -14,7 +14,7 @@ struct Cli {
     host: String,
     #[arg(long, default_value_t = 7890, global = true)]
     port: u16,
-    #[arg(long, default_value_t = 2000, global = true)]
+    #[arg(long, default_value_t = 3000, global = true)]
     warn_loc: usize,
 }
 
@@ -42,6 +42,10 @@ enum Commands {
     Skeleton {
         #[arg(long)]
         repo: Option<String>,
+        /// Write the skeleton to this file instead of the clipboard.
+        /// Parent directories are created automatically.
+        #[arg(short = 'o', long, value_name = "PATH")]
+        output: Option<String>,
     },
     File {
         paths: Vec<String>,
@@ -387,15 +391,48 @@ fn cmd_catalog(_repo: Option<&str>, base: &str) {
     }
 }
 
-fn cmd_skeleton(repo: Option<&str>, base: &str, warn_loc: usize) {
+fn cmd_skeleton(repo: Option<&str>, base: &str, warn_loc: usize, output: Option<&str>) {
     let mut url = format!("{}/skeleton", base);
     if let Some(r) = repo {
         url = format!("{}?repo={}", url, r);
     }
+
     match fetch_text(&url) {
         Ok(body) => {
             let loc = body.lines().count();
-            copy_to_clipboard(&body, warn_loc, &[format!("SKELETON [{} LOC]", loc)]);
+
+            if let Some(path_str) = output {
+                // --output: persist to disk
+                let path = std::path::Path::new(path_str);
+
+                if let Some(parent) = path.parent() {
+                    if !parent.as_os_str().is_empty() {
+                        if let Err(e) = std::fs::create_dir_all(parent) {
+                            eprintln!("❌ Failed to create {}: {}", parent.display(), e);
+                            return;
+                        }
+                    }
+                }
+
+                if loc > warn_loc {
+                    eprintln!(
+                        "⚠️  About to write {} LOC to {} (threshold: {})",
+                        loc,
+                        path.display(),
+                        warn_loc
+                    );
+                    eprintln!("  Waiting 3s... (Ctrl+C to abort)");
+                    std::thread::sleep(std::time::Duration::from_secs(3));
+                }
+
+                match std::fs::write(path, &body) {
+                    Ok(_) => println!("✅ Wrote {} LOC to {}", loc, path.display()),
+                    Err(e) => eprintln!("❌ Failed to write file: {}", e),
+                }
+            } else {
+                // default: clipboard
+                copy_to_clipboard(&body, warn_loc, &[format!("SKELETON [{} LOC]", loc)]);
+            }
         }
         Err(e) => eprintln!("❌ {}", e),
     }
@@ -532,7 +569,9 @@ fn main() {
         Commands::RemoveRepo { id } => cmd_remove_repo(&id, &base),
         Commands::Sync { repo } => cmd_sync(repo.as_deref(), &base),
         Commands::Catalog { repo } => cmd_catalog(repo.as_deref(), &base),
-        Commands::Skeleton { repo } => cmd_skeleton(repo.as_deref(), &base, cli.warn_loc),
+        Commands::Skeleton { repo, output } => {
+            cmd_skeleton(repo.as_deref(), &base, cli.warn_loc, output.as_deref())
+        }
         Commands::File { paths } => cmd_file(&paths, &base, cli.warn_loc),
         Commands::Hash { hashes } => cmd_hash(&hashes, &base, cli.warn_loc),
         Commands::Info { target, file } => cmd_info(&target, file, &base),

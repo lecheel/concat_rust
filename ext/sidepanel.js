@@ -306,7 +306,17 @@ async function doFetch() {
       params.set('repo', activeRepo);
     }
   } else {
-    const hashes = hashesText.split(/[\r\n\s,]+/).map(h => h.trim()).filter(Boolean);
+    // Split input and clean up common prefixes (like "hash:" or "hash=") from pasted entries
+    const hashes = hashesText.split(/[\r\n\s,]+/)
+      .map(h => {
+        let clean = h.trim();
+        if (/^hash[:=]/i.test(clean)) {
+          clean = clean.replace(/^hash[:=]/i, '');
+        }
+        return clean;
+      })
+      .filter(Boolean);
+
     const rawFiles = filesText.split(/[\s,]+/).map(f => f.trim()).filter(Boolean);
 
     const resolvedFiles = rawFiles.map(f => resolvePath(f, activeRepo));
@@ -392,8 +402,13 @@ function parseCommandLine(line) {
       }
     } else {
       const parts = token.split(',').map(p => p.replace(/['"]/g, '').trim()).filter(Boolean);
-      for (const cleanToken of parts) {
+      for (let cleanToken of parts) {
         if (cleanToken) {
+          // SMART CLEAN: strip hash: / HASH: / hash= prefixes
+          if (/^hash[:=]/i.test(cleanToken)) {
+            cleanToken = cleanToken.replace(/^hash[:=]/i, '');
+          }
+
           if (parsingFiles || cleanToken.includes('.') || cleanToken.includes('/')) {
             files.push(cleanToken);
           } else {
