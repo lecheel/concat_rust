@@ -247,10 +247,94 @@ fn cmd_use(repo_id: &str, base: &str) {
     }
 }
 
-fn cmd_active() {
-    match get_active_repo() {
-        Some(repo) => println!("Active repo: {}", repo),
-        None => println!("No active repo set. Use: cli use <repo_id>"),
+fn format_timestamp(ts: u64) -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let diff = now.saturating_sub(ts);
+    if diff < 60 {
+        format!("{}s ago", diff)
+    } else if diff < 3600 {
+        format!("{}m ago", diff / 60)
+    } else if diff < 86400 {
+        format!("{}h ago", diff / 3600)
+    } else {
+        format!("{}d ago", diff / 86400)
+    }
+}
+
+fn cmd_active(base: &str) {
+    const GREEN: &str = "\x1b[32m";
+    const DIM: &str = "\x1b[2m";
+    const RESET: &str = "\x1b[0m";
+
+    let active = get_active_repo();
+    let repos = fetch_json(&format!("{}/repos", base)).ok();
+
+    match active.as_deref() {
+        Some("none") => {
+            println!("⚪ Active repo: <none>");
+            println!();
+            println!("  Paths must be fully qualified:");
+            println!("  cli file myrepo/src/main.rs");
+            println!();
+            println!("  Set active: cli use <repo_id>");
+        }
+        Some(repo_id) => {
+            println!("{}🟢 Active repo: {}{}", GREEN, repo_id, RESET);
+
+            if let Some(arr) = repos.as_ref().and_then(|r| r.as_array()) {
+                if let Some(repo) = arr.iter().find(|r| r["id"].as_str() == Some(repo_id)) {
+                    let path = repo["source_path"].as_str().unwrap_or("?");
+                    let branch = repo["git_branch"].as_str().unwrap_or("detached");
+                    let files = repo["file_count"].as_u64().unwrap_or(0);
+                    let last_sync = repo["last_sync"].as_u64();
+
+                    println!("  ├─ Path:   {}{}{}", DIM, path, RESET);
+                    println!("  ├─ Branch: {}{}{}", DIM, branch, RESET);
+                    println!("  ├─ Files:  {}{}{}", DIM, files, RESET);
+                    if let Some(ts) = last_sync {
+                        println!("  └─ Sync:   {}{}{}", DIM, format_timestamp(ts), RESET);
+                    }
+                }
+            }
+
+            println!();
+            println!("  Path shorthand:");
+            println!(
+                "    {}main.rs{}       → {}/src/main.rs",
+                DIM, RESET, repo_id
+            );
+            println!("    {}lib.rs{}        → {}/src/lib.rs", DIM, RESET, repo_id);
+            println!(
+                "    {}src/main.rs{}   → {}/src/main.rs",
+                DIM, RESET, repo_id
+            );
+            println!("    {}Cargo.toml{}    → {}/Cargo.toml", DIM, RESET, repo_id);
+            println!();
+            println!("  {}Clear: cli use none{}", DIM, RESET);
+        }
+        None => {
+            println!("⚪ No active repo set");
+            println!();
+            println!("  Set:  cli use <repo_id>");
+            println!("  Skip: cli use none");
+
+            if let Some(arr) = repos.as_ref().and_then(|r| r.as_array()) {
+                if !arr.is_empty() {
+                    println!();
+                    println!("  Available:");
+                    for r in arr {
+                        if let Some(id) = r["id"].as_str() {
+                            let path = r["source_path"].as_str().unwrap_or("?");
+                            println!("    {}{:12} {}{}", DIM, id, path, RESET);
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -262,32 +346,99 @@ fn cmd_repos(base: &str) {
             return;
         }
     };
-    if let Some(arr) = repos.as_array() {
-        if arr.is_empty() {
-            println!("No repos registered. Use: cli add-repo <id> <path>");
+
+    let arr = match repos.as_array() {
+        Some(a) if !a.is_empty() => a,
+        _ => {
+            println!("No repos registered.\n");
+            println!("  Add a repo:");
+            println!("    cli add-repo myapp /path/to/project");
+            println!("    cli add-repo myapp .");
             return;
         }
-        println!("📋 Registered Repos:");
-        println!("{}", "─".repeat(60));
-        for r in arr {
-            let id = r["id"].as_str().unwrap_or("?");
-            let path = r["source_path"].as_str().unwrap_or("?");
-            let branch = r["git_branch"].as_str().unwrap_or("detached");
-            let files = r["file_count"].as_u64().unwrap_or(0);
-            let active = if let Some(ar) = get_active_repo() {
-                if ar == id {
-                    "🟢"
-                } else {
-                    "⚪"
-                }
-            } else {
-                "⚪"
-            };
+    };
+
+    let active = get_active_repo();
+    let mut total_files = 0u64;
+
+    let mut sorted: Vec<_> = arr.iter().collect();
+    sorted.sort_by(|a, b| {
+        let a_active = active.as_deref() == a["id"].as_str();
+        let b_active = active.as_deref() == b["id"].as_str();
+        match (a_active, b_active) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a["id"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["id"].as_str().unwrap_or("")),
+        }
+    });
+
+    const GREEN: &str = "\x1b[32m";
+    const DIM: &str = "\x1b[2m";
+    const RESET: &str = "\x1b[0m";
+
+    for r in &sorted {
+        let id = r["id"].as_str().unwrap_or("?");
+        let path = r["source_path"].as_str().unwrap_or("?");
+        let files = r["file_count"].as_u64().unwrap_or(0);
+        let branch = r["git_branch"].as_str().unwrap_or("detached");
+        let last_sync = r["last_sync"].as_u64();
+
+        total_files += files;
+
+        let is_active = active.as_deref() == Some(id);
+
+        if is_active {
             println!(
-                "{} {:10} {:30} [{}] ({} files)",
-                active, id, path, branch, files
+                "{}→{} {}{}{}  {}[{}]{}",
+                GREEN, RESET, GREEN, id, RESET, DIM, branch, RESET
+            );
+            println!(
+                "  {}{}{}  {}({} files, {}){}",
+                DIM,
+                path,
+                RESET,
+                DIM,
+                files,
+                sync_label(last_sync),
+                RESET
+            );
+            println!("  {}↑ active — paths resolve here{}", GREEN, RESET);
+        } else {
+            println!("  {}  [{}]", id, branch);
+            println!(
+                "  {}{}{}  {}({} files, {}){}",
+                DIM,
+                path,
+                RESET,
+                DIM,
+                files,
+                sync_label(last_sync),
+                RESET
             );
         }
+        println!();
+    }
+
+    println!("  {} repos, {} files", sorted.len(), total_files);
+
+    match active.as_deref() {
+        None | Some("none") => {
+            println!("  💡 Set active: cli use <id>");
+        }
+        Some(id) if !arr.iter().any(|r| r["id"].as_str() == Some(id)) => {
+            println!("  ⚠️  Active repo '{}' not found. Use: cli use <id>", id);
+        }
+        _ => {}
+    }
+}
+
+fn sync_label(last_sync: Option<u64>) -> String {
+    match last_sync {
+        Some(ts) => format!("synced {}", format_timestamp(ts)),
+        None => "not synced".to_string(),
     }
 }
 
@@ -612,7 +763,7 @@ fn main() {
     let base = base_url(&cli);
     match cli.command {
         Commands::Use { repo_id } => cmd_use(&repo_id, &base),
-        Commands::Active => cmd_active(),
+        Commands::Active => cmd_active(&base),
         Commands::Repos => cmd_repos(&base),
         Commands::AddRepo { id, source_path } => cmd_add_repo(&id, &source_path, &base),
         Commands::RemoveRepo { id } => cmd_remove_repo(&id, &base),
