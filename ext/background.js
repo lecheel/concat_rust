@@ -1,5 +1,3 @@
-//--+ background.js
-// Open side panel when the extension action icon is clicked
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -30,7 +28,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   }
 });
 
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'fetchAndPaste') {
     fetchAndPaste(message.host, message.port, message.params, {
@@ -45,12 +42,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'fetchRepos') {
     const host = message.host || '127.0.0.1';
     const port = message.port || '7890';
-    const url = `http://${host}:${port}/repos`;
-    fetch(url)
-      .then(resp => {
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        return resp.json();
-      })
+    fetch(`http://${host}:${port}/repos`)
+      .then(resp => { if (!resp.ok) throw new Error(`HTTP ${resp.status}`); return resp.json(); })
       .then(data => sendResponse({ success: true, data }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
@@ -59,16 +52,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'fetchActiveRepo') {
     const host = message.host || '127.0.0.1';
     const port = message.port || '7890';
-    const url = `http://${host}:${port}/active`;
-    fetch(url)
-      .then(resp => {
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-        return resp.text();
-      })
-      .then(text => {
-        const repo = text.trim();
-        sendResponse({ success: true, repo });
-      })
+    fetch(`http://${host}:${port}/active`)
+      .then(resp => { if (!resp.ok) throw new Error(`HTTP ${resp.status}`); return resp.text(); })
+      .then(text => sendResponse({ success: true, repo: text.trim() }))
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
@@ -85,9 +71,7 @@ async function fetchAndPaste(host, port, paramsStr, options = {}) {
 
   async function fetchUrl(url, label) {
     const response = await fetch(url);
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} for ${label}`);
-    }
+    if (!response.ok) throw new Error(`HTTP ${response.status} for ${label}`);
     const text = await response.text();
     if (clipboardContent) clipboardContent += '\n\n';
     clipboardContent += text;
@@ -106,27 +90,20 @@ async function fetchAndPaste(host, port, paramsStr, options = {}) {
       if (hashes.length > 0) {
         const hashQuery = hashes.join('+');
         const resp = await fetch(`${baseUrl}/${hashQuery}${repoQuery}`);
-        if (!resp.ok) {
-          throw new Error(`Hashes query failed (HTTP ${resp.status})`);
-        }
+        if (!resp.ok) throw new Error(`Hashes query failed (HTTP ${resp.status})`);
         const text = await resp.text();
         if (clipboardContent) clipboardContent += '\n\n';
         clipboardContent += text;
 
-        const lines = text.split('\n');
         const foundFiles = new Set();
-        for (const line of lines) {
+        for (const line of text.split('\n')) {
           if (line.startsWith('//--+ file:///')) {
             foundFiles.add(line.replace('//--+ file:///', ''));
           }
         }
-
-        if (foundFiles.size > 0) {
-          const filesList = Array.from(foundFiles).join(', ');
-          summaries.push(`${hashes.length} block(s) -> [${filesList}]`);
-        } else {
-          summaries.push(`${hashes.length} block(s)`);
-        }
+        summaries.push(foundFiles.size > 0
+          ? `${hashes.length} block(s) -> [${Array.from(foundFiles).join(', ')}]`
+          : `${hashes.length} block(s)`);
       }
 
       for (const filepath of params.getAll('file')) {
@@ -151,100 +128,224 @@ async function fetchAndPaste(host, port, paramsStr, options = {}) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// Self-contained function injected into the LLM page via
+// chrome.scripting.executeScript. ALL helpers must be inline —
+// the page context only sees this function's body.
+// ═══════════════════════════════════════════════════════════════════
 function pasteAndCopyToClipboardInPage(textToPaste, options = {}) {
-  const pasteAsFile = options.pasteAsFile;
-  const filename = options.filename || 'file.rs';
 
-  navigator.clipboard.writeText(textToPaste).catch(() => {});
+  // ── Logging ──
+  const T = '%c[Concat Paste]%c', F = 'color:#6366f1;font-weight:bold', R = 'color:inherit';
+  const log  = (...a) => console.log(T, F, R, ...a);
+  const warn = (...a) => console.warn(T, F, R, ...a);
+  const ok   = (...a) => console.log(T, F, 'color:#22c55e', ...a);
+  const err  = (...a) => console.error(T, F, 'color:#ef4444', ...a);
 
-  if (pasteAsFile) {
-    const fileInput = document.querySelector('input[type="file"]');
-    if (fileInput) {
-      try {
-        const dt = new DataTransfer();
-        dt.items.add(new File([textToPaste], filename, { type: 'text/plain' }));
-        fileInput.files = dt.files;
-        fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-        return;
-      } catch (err) {
-        console.warn("Failed file input upload, falling back to text paste:", err);
-      }
-    } else {
-      console.warn("No hidden file inputs found on the active page. Falling back to text paste.");
-    }
-  }
-
-  let target = document.activeElement;
-  let isEditable = target && (
-    target.isContentEditable ||
-    target.tagName === 'TEXTAREA' ||
-    (target.tagName === 'INPUT' && !['button','checkbox','radio','submit','hidden'].includes(target.type))
-  );
-
-  if (!isEditable) {
-    target = findBestEditable();
-  }
-
-  if (!target) {
-    console.warn('No editable field found. Content copied to clipboard only.');
-    return;
-  }
-
-  target.focus();
-
-  if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
-    const start = target.selectionStart;
-    const end   = target.selectionEnd;
-    const value = target.value;
-    target.value = value.slice(0, start) + textToPaste + value.slice(end);
-    target.dispatchEvent(new Event('input', { bubbles: true }));
-    target.setSelectionRange(start + textToPaste.length, start + textToPaste.length);
-  } else if (target.isContentEditable) {
-    const dt = new DataTransfer();
-    dt.setData('text/plain', textToPaste);
-    const pasteEvent = new ClipboardEvent('paste', {
-      bubbles: true,
-      cancelable: true,
-      clipboardData: dt,
-    });
-    target.dispatchEvent(pasteEvent);
-
-    if (!pasteEvent.defaultPrevented) {
-      document.execCommand('insertText', false, textToPaste);
-    }
-    target.dispatchEvent(new Event('input', { bubbles: true }));
-  }
-}
-
-function findBestEditable() {
-  const candidates = [];
-
-  const isVisible = (el) => {
+  // ── isElementVisible ──
+  function isVisible(el) {
+    if (!el) return false;
     if (el.offsetWidth === 0 && el.offsetHeight === 0) return false;
     const s = getComputedStyle(el);
     return s.display !== 'none' && s.visibility !== 'hidden' && parseFloat(s.opacity) > 0;
-  };
+  }
 
-  document.querySelectorAll('textarea').forEach(el => {
-    if (isVisible(el)) candidates.push({ el, priority: 3 });
-  });
+  // ── findLLMInput ──
+  function findLLMInput() {
+    const selectors = [
+      // ChatGLM
+      'textarea#chat-input',
+      // ChatGPT
+      '#prompt-textarea',
+      'div#prompt-textarea[contenteditable="true"]',
+      'div[contenteditable="true"][data-placeholder]',
+      // Claude
+      'div.ProseMirror[contenteditable="true"]',
+      'div[contenteditable="true"][data-testid="composer-input"]',
+      // Gemini
+      'div.ql-editor[contenteditable="true"]',
+      // Generic textarea chat inputs
+      'textarea[placeholder*="message" i]',
+      'textarea[placeholder*="send" i]',
+      'textarea[placeholder*="chat" i]',
+      'textarea[placeholder*="prompt" i]',
+      'textarea[placeholder*="ask" i]',
+      'textarea[aria-label*="message" i]',
+      'textarea[aria-label*="chat" i]',
+      'textarea[aria-label*="prompt" i]',
+      'textarea[role="textbox"]',
+      // Generic contenteditable chat inputs
+      'div[contenteditable="true"][aria-label*="prompt" i]',
+      'div[contenteditable="true"][class*="input"]',
+      'div[contenteditable="true"][class*="composer"]',
+      'div[contenteditable="true"][class*="chat-input"]',
+      'div[contenteditable="true"][class*="textarea"]',
+      'div[contenteditable="true"][role="textbox"]',
+      'div[contenteditable="true"][aria-label*="message" i]',
+      'div[contenteditable="true"][aria-label*="chat" i]',
+      'div[contenteditable="true"][placeholder]',
+      // Last resort
+      'textarea:not([type])',
+      'div[contenteditable="true"]',
+    ];
+    for (const sel of selectors) {
+      try {
+        for (const el of document.querySelectorAll(sel)) {
+          if (isVisible(el)) {
+            log('Found input via:', sel, el.tagName, el.id ? '#' + el.id : '');
+            return el;
+          }
+        }
+      } catch (_) {}
+    }
+    log('No LLM input found via selectors');
+    return null;
+  }
 
-  document.querySelectorAll('input[type="text"], input[type="search"], input:not([type])').forEach(el => {
-    if (isVisible(el)) candidates.push({ el, priority: 2 });
-  });
+  // ── findBestEditable (fallback) ──
+  function findBestEditable() {
+    const c = [];
+    document.querySelectorAll('textarea').forEach(el => { if (isVisible(el)) c.push({ el, p: 3 }); });
+    document.querySelectorAll('input[type="text"],input[type="search"],input:not([type])').forEach(el => { if (isVisible(el)) c.push({ el, p: 2 }); });
+    document.querySelectorAll('[contenteditable="true"],[contenteditable=""]').forEach(el => { if (isVisible(el)) c.push({ el, p: 1 }); });
+    if (!c.length) return null;
+    c.sort((a, b) => b.p - a.p || (b.el.offsetWidth * b.el.offsetHeight) - (a.el.offsetWidth * a.el.offsetHeight));
+    log('Fallback editable:', c[0].el.tagName, c[0].el.id || '');
+    return c[0].el;
+  }
 
-  document.querySelectorAll('[contenteditable="true"], [contenteditable=""]').forEach(el => {
-    if (isVisible(el)) candidates.push({ el, priority: 1 });
-  });
+  // ── activateElement ──
+  function activate(el) {
+    el.focus();
+    el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    el.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    el.dispatchEvent(new FocusEvent('focus'));
+    // Cursor to end
+    const sel = window.getSelection();
+    if (sel) {
+      const rng = document.createRange();
+      if (el.childNodes.length > 0) {
+        const last = el.childNodes[el.childNodes.length - 1];
+        if (last.nodeType === Node.TEXT_NODE) rng.setStart(last, last.textContent.length);
+        else rng.setStartAfter(last);
+      } else {
+        rng.setStart(el, 0);
+      }
+      rng.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(rng);
+    }
+  }
 
-  if (candidates.length === 0) return null;
+  // ── insertIntoInput (textarea / input) ──
+  function insertIntoInput(el, text) {
+    const s = el.selectionStart || el.value.length;
+    const e = el.selectionEnd || el.value.length;
+    el.value = el.value.slice(0, s) + text + el.value.slice(e);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    el.dispatchEvent(new Event('change', { bubbles: true }));
+    el.setSelectionRange(s + text.length, s + text.length);
+    ok('✅ Inserted into textarea at pos ' + s);
+  }
 
-  candidates.sort((a, b) => {
-    if (b.priority !== a.priority) return b.priority - a.priority;
-    const aArea = a.el.offsetWidth * a.el.offsetHeight;
-    const bArea = b.el.offsetWidth * b.el.offsetHeight;
-    return bArea - aArea;
-  });
+  // ── insertIntoContentEditable ──
+  function insertIntoContentEditable(el, text) {
+    const probe = text.substring(0, 30);
 
-  return candidates[0].el;
+    // Method 1: execCommand('insertText')
+    try {
+      el.focus();
+      const sel = window.getSelection(), rng = document.createRange();
+      if (el.childNodes.length > 0) {
+        const last = el.childNodes[el.childNodes.length - 1];
+        if (last.nodeType === Node.TEXT_NODE) rng.setStart(last, last.textContent.length);
+        else rng.setStartAfter(last);
+      } else rng.setStart(el, 0);
+      rng.collapse(true); sel.removeAllRanges(); sel.addRange(rng);
+      if (document.execCommand('insertText', false, text) && el.textContent.includes(probe)) {
+        ok('✅ Method 1: execCommand'); return;
+      }
+    } catch (_) {}
+
+    // Method 2: InputEvent 'insertText'
+    try {
+      el.focus();
+      const evt = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType: 'insertText', data: text });
+      el.dispatchEvent(evt);
+      if (evt.defaultPrevented) { el.dispatchEvent(new Event('input', { bubbles: true })); ok('✅ Method 2: beforeinput'); return; }
+      document.execCommand('insertText', false, text);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      if (el.textContent.includes(probe)) { ok('✅ Method 2: beforeinput+exec'); return; }
+    } catch (_) {}
+
+    // Method 3: ClipboardEvent('paste')
+    try {
+      el.focus();
+      const dt = new DataTransfer(); dt.setData('text/plain', text);
+      const evt = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: dt });
+      el.dispatchEvent(evt);
+      if (evt.defaultPrevented) { el.dispatchEvent(new Event('input', { bubbles: true })); ok('✅ Method 3: paste event'); return; }
+      document.execCommand('insertText', false, text);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      if (el.textContent.includes(probe)) { ok('✅ Method 3: paste+exec'); return; }
+    } catch (_) {}
+
+    // Method 4: Direct DOM mutation (last resort)
+    try {
+      el.focus();
+      const node = document.createTextNode(text);
+      const sel = window.getSelection();
+      if (sel.rangeCount > 0) {
+        const rng = sel.getRangeAt(0); rng.deleteContents(); rng.insertNode(node);
+        rng.setStartAfter(node); rng.collapse(true); sel.removeAllRanges(); sel.addRange(rng);
+      } else el.appendChild(node);
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      warn('⚠️ Method 4: Direct DOM (may need space to commit)');
+    } catch (e) {
+      err('❌ All methods failed:', e);
+      log('Content is in clipboard — use Ctrl+V manually');
+    }
+  }
+
+  // ═══════════════════ MAIN ═══════════════════
+
+  log('Paste requested —', textToPaste.length, 'bytes');
+  navigator.clipboard.writeText(textToPaste).catch(() => {});
+
+  // File upload
+  if (options.pasteAsFile) {
+    const fi = document.querySelector('input[type="file"]');
+    if (fi) {
+      try {
+        const dt = new DataTransfer();
+        dt.items.add(new File([textToPaste], options.filename || 'file.rs', { type: 'text/plain' }));
+        fi.files = dt.files;
+        fi.dispatchEvent(new Event('change', { bubbles: true }));
+        ok('✅ Pasted as file'); return;
+      } catch (e) { warn('File upload failed:', e); }
+    }
+  }
+
+  // Find target
+  let target = findLLMInput();
+  if (!target) {
+    const a = document.activeElement;
+    if (a && (a.isContentEditable || a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && !['button','checkbox','radio','submit','hidden'].includes(a.type)))) {
+      target = a;
+      log('Using active element:', a.tagName, a.id || '');
+    }
+  }
+  if (!target) target = findBestEditable();
+  if (!target) { err('❌ No editable field found — content in clipboard only'); return; }
+
+  log('Target:', target.tagName, target.id ? '#' + target.id : '');
+  activate(target);
+
+  if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') insertIntoInput(target, textToPaste);
+  else if (target.isContentEditable) insertIntoContentEditable(target, textToPaste);
+
+  ok('✅ Paste complete');
 }
