@@ -1,5 +1,58 @@
+//--+ src/bin/cli.rs
 use arboard::Clipboard;
 use clap::{Parser, Subcommand};
+use dialoguer::Select;
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+// ── Terminal helpers ──────────────────────────────────────────────
+
+/// Ensure cursor is visible and formatting is reset.
+fn restore_terminal() {
+    let _ = std::io::stdout().lock().write_all(b"\x1b[?25h\x1b[0m");
+    let _ = std::io::stdout().lock().flush();
+}
+
+/// RAII guard that restores the terminal when dropped (safety net).
+struct TerminalGuard;
+
+impl Drop for TerminalGuard {
+    fn drop(&mut self) {
+        restore_terminal();
+    }
+}
+
+fn setup_ctrlc() {
+    let _ = ctrlc::set_handler(|| {
+        INTERRUPTED.store(true, Ordering::SeqCst);
+    });
+}
+
+fn is_interrupted() -> bool {
+    INTERRUPTED.load(Ordering::SeqCst)
+}
+
+fn check_interrupted() {
+    if is_interrupted() {
+        restore_terminal();
+        std::process::exit(130);
+    }
+}
+
+/// Sleep that can be interrupted by Ctrl+C. Returns `true` if interrupted.
+fn interruptible_sleep(duration: std::time::Duration) -> bool {
+    let start = std::time::Instant::now();
+    let check_interval = std::time::Duration::from_millis(100);
+    while start.elapsed() < duration {
+        if is_interrupted() {
+            return true;
+        }
+        std::thread::sleep(check_interval.min(duration - start.elapsed()));
+    }
+    false
+}
 
 #[derive(Parser, Debug)]
 #[command(name = "concat_rust_cli", about = "CLI for the concat_rust daemon")]
@@ -17,7 +70,7 @@ struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
     Use {
-        repo_id: String,
+        repo_id: Option<String>,
     },
     Active,
     Repos,
@@ -116,7 +169,6 @@ fn resolve_path(input: &str, active_repo: Option<&str>) -> String {
     if let Some(repo) = active_repo {
         let repo_prefix = format!("{}/", repo);
         if with_src.starts_with(&repo_prefix) || has_repo_prefix(&with_src) {
-            // Path already has a repo prefix — use as-is
             with_src
         } else {
             format!("{}{}", repo_prefix, with_src)
@@ -138,6 +190,7 @@ fn base_url(cli: &Cli) -> String {
 }
 
 fn fetch_text(url: &str) -> Result<String, String> {
+    check_interrupted();
     let resp = reqwest::blocking::get(url).map_err(|e| format!("Connection failed: {}", e))?;
     let status = resp.status();
     let body = resp
@@ -151,6 +204,7 @@ fn fetch_text(url: &str) -> Result<String, String> {
 }
 
 fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
+    check_interrupted();
     let resp = reqwest::blocking::get(url).map_err(|e| format!("Connection failed: {}", e))?;
     let status = resp.status();
     let body = resp
@@ -166,6 +220,7 @@ fn fetch_json(url: &str) -> Result<serde_json::Value, String> {
 }
 
 fn post_text(url: &str) -> Result<String, String> {
+    check_interrupted();
     let client = reqwest::blocking::Client::new();
     let resp = client
         .post(url)
@@ -183,6 +238,7 @@ fn post_text(url: &str) -> Result<String, String> {
 }
 
 fn post_json(url: &str, body: &serde_json::Value) -> Result<String, String> {
+    check_interrupted();
     let client = reqwest::blocking::Client::new();
     let resp = client
         .post(url)
@@ -218,31 +274,127 @@ fn set_active_repo(repo: &str) {
     let _ = std::fs::write(active_repo_path(), repo);
 }
 
-fn cmd_use(repo_id: &str, base: &str) {
-    if repo_id == "none" {
-        set_active_repo("none");
-        println!("Cleared active repo. Paths must be fully qualified.");
+fn fetch_repo_list(base: &str) -> Result<Vec<serde_json::Value>, String> {
+    let repos = fetch_json(&format!("{}/repos", base))?;
+    repos
+        .as_array()
+        .cloned()
+        .ok_or_else(|| "Unexpected repos format".to_string())
+}
+
+fn cmd_use(repo_id: Option<&str>, base: &str) {
+    if let Some(id) = repo_id {
+        if id == "none" {
+            set_active_repo("none");
+            println!("○ no active repo  ·  paths are now fully qualified");
+            return;
+        }
+        let repos = match fetch_repo_list(base) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("❌ Failed to fetch repos: {}", e);
+                return;
+            }
+        };
+        if repos.iter().any(|r| r["id"].as_str() == Some(id)) {
+            set_active_repo(id);
+            println!("Active repo: {}", id);
+            println!("  Files will be looked up in repo '{}'", id);
+        } else {
+            eprintln!("❌ Unknown repo '{}'. Available:", id);
+            for r in &repos {
+                if let Some(rid) = r["id"].as_str() {
+                    eprintln!("  {}", rid);
+                }
+            }
+        }
         return;
     }
-    let repos = match fetch_json(&format!("{}/repos", base)) {
+
+    let repos = match fetch_repo_list(base) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("❌ Failed to fetch repos: {}", e);
             return;
         }
     };
-    if let Some(arr) = repos.as_array() {
-        if arr.iter().any(|r| r["id"].as_str() == Some(repo_id)) {
-            set_active_repo(repo_id);
-            println!("Active repo: {}", repo_id);
-            println!("  Files will be looked up in repo '{}'", repo_id);
-        } else {
-            eprintln!("❌ Unknown repo '{}'. Available:", repo_id);
-            for r in arr {
-                if let Some(id) = r["id"].as_str() {
-                    eprintln!("  {}", id);
+
+    if repos.is_empty() {
+        println!("No repos registered.\n");
+        println!("  Add a repo:");
+        println!("    cli add-repo myapp /path/to/project");
+        println!("    cli add-repo myapp .");
+        return;
+    }
+
+    let active = get_active_repo();
+    let mut sorted: Vec<_> = repos.iter().collect();
+    sorted.sort_by(|a, b| {
+        let a_active = active.as_deref() == a["id"].as_str();
+        let b_active = active.as_deref() == b["id"].as_str();
+        match (a_active, b_active) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => a["id"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["id"].as_str().unwrap_or("")),
+        }
+    });
+
+    let repo_count = sorted.len();
+    let mut items: Vec<String> = sorted
+        .iter()
+        .map(|r| {
+            let id = r["id"].as_str().unwrap_or("?");
+            let branch = r["git_branch"].as_str().unwrap_or("detached");
+            let path = r["source_path"].as_str().unwrap_or("?");
+            let files = r["file_count"].as_u64().unwrap_or(0);
+            let is_active = active.as_deref() == Some(id);
+            let prefix = if is_active { "● " } else { "  " };
+            format!("{}{} [{}] ({} files) — {}", prefix, id, branch, files, path)
+        })
+        .collect();
+    items.push("Clear active repo".to_string());
+
+    let default_index = active
+        .as_deref()
+        .and_then(|a| sorted.iter().position(|r| r["id"].as_str() == Some(a)))
+        .unwrap_or(0);
+
+    // CHANGED: Use interact_opt() to capture ESC/q actions cleanly
+    let result = Select::new()
+        .with_prompt("Select a repo")
+        .items(&items)
+        .default(default_index)
+        .interact_opt();
+
+    // ALWAYS restore cursor after dialoguer
+    restore_terminal();
+
+    match result {
+        Ok(Some(idx)) => {
+            if idx < repo_count {
+                // Selected a repo
+                if let Some(chosen) = sorted[idx]["id"].as_str() {
+                    set_active_repo(chosen);
+                    println!("✅ Active repo: {}", chosen);
+                    println!("  Files will be looked up in repo '{}'", chosen);
                 }
+            } else if idx == repo_count {
+                // "Clear active repo"
+                set_active_repo("none");
+                println!("Cleared active repo. Paths must be fully qualified.");
             }
+            // If idx == repo_count + 1 ("← Cancel"), we simply do nothing
+        }
+        Ok(None) => {
+            // User cancelled using ESC or 'q'
+            println!("Cancelled.");
+        }
+        Err(_) => {
+            // ESC, Ctrl+C, or terminal error during dialoguer
+            println!("Cancelled or interrupted.");
         }
     }
 }
@@ -280,7 +432,7 @@ fn cmd_active(base: &str) {
             println!("  Paths must be fully qualified:");
             println!("  cli file myrepo/src/main.rs");
             println!();
-            println!("  Set active: cli use <repo_id>");
+            println!("  Set active: cli use");
         }
         Some(repo_id) => {
             println!("{}🟢 Active repo: {}{}", GREEN, repo_id, RESET);
@@ -320,7 +472,7 @@ fn cmd_active(base: &str) {
             println!("⚪ No active repo set");
             println!();
             println!("  Set:  cli use <repo_id>");
-            println!("  Skip: cli use none");
+            println!("  Pick: cli use");
 
             if let Some(arr) = repos.as_ref().and_then(|r| r.as_array()) {
                 if !arr.is_empty() {
@@ -426,10 +578,10 @@ fn cmd_repos(base: &str) {
 
     match active.as_deref() {
         None | Some("none") => {
-            println!("  💡 Set active: cli use <id>");
+            println!("  💡 Set active: cli use");
         }
         Some(id) if !arr.iter().any(|r| r["id"].as_str() == Some(id)) => {
-            println!("  ⚠️  Active repo '{}' not found. Use: cli use <id>", id);
+            println!("  ⚠️  Active repo '{}' not found. Use: cli use", id);
         }
         _ => {}
     }
@@ -513,7 +665,6 @@ fn cmd_prompt(base: &str, warn_loc: usize, output: Option<&str>, instruction: Op
                     Err(e) => eprintln!("❌ Failed to write file: {}", e),
                 }
             } else {
-                // Copy to clipboard. If it succeeds, also print it directly to the terminal.
                 if copy_to_clipboard(&final_content, warn_loc, &[format!("PROMPT [{} LOC]", loc)]) {
                     println!("\n{}", final_content);
                 }
@@ -534,7 +685,11 @@ fn copy_to_clipboard(content: &str, warn_loc: usize, summaries: &[String]) -> bo
             eprintln!("  - {}", s);
         }
         eprintln!("  Waiting 3s... (Ctrl+C to abort)");
-        std::thread::sleep(std::time::Duration::from_secs(3));
+        if interruptible_sleep(std::time::Duration::from_secs(3)) {
+            restore_terminal();
+            println!("\nInterrupted.");
+            std::process::exit(130);
+        }
     }
     match Clipboard::new().and_then(|mut cb| cb.set_text(content)) {
         Ok(_) => {
@@ -602,7 +757,6 @@ fn cmd_skeleton(repo: Option<&str>, base: &str, warn_loc: usize, output: Option<
             let loc = body.lines().count();
 
             if let Some(path_str) = output {
-                // --output: persist to disk
                 let path = std::path::Path::new(path_str);
 
                 if let Some(parent) = path.parent() {
@@ -622,7 +776,11 @@ fn cmd_skeleton(repo: Option<&str>, base: &str, warn_loc: usize, output: Option<
                         warn_loc
                     );
                     eprintln!("  Waiting 3s... (Ctrl+C to abort)");
-                    std::thread::sleep(std::time::Duration::from_secs(3));
+                    if interruptible_sleep(std::time::Duration::from_secs(3)) {
+                        restore_terminal();
+                        println!("\nInterrupted.");
+                        std::process::exit(130);
+                    }
                 }
 
                 match std::fs::write(path, &body) {
@@ -630,7 +788,6 @@ fn cmd_skeleton(repo: Option<&str>, base: &str, warn_loc: usize, output: Option<
                     Err(e) => eprintln!("❌ Failed to write file: {}", e),
                 }
             } else {
-                // default: clipboard
                 copy_to_clipboard(&body, warn_loc, &[format!("SKELETON [{} LOC]", loc)]);
             }
         }
@@ -644,6 +801,7 @@ fn cmd_file(paths: &[String], base: &str, warn_loc: usize) {
     let mut summaries = Vec::new();
     for p in paths {
         for part in p.split(',') {
+            check_interrupted();
             let part = part.trim();
             if part.is_empty() {
                 continue;
@@ -759,10 +917,17 @@ fn cmd_hash(hashes: &[String], base: &str, warn_loc: usize) {
 }
 
 fn main() {
+    // Safety net: restore terminal on any exit path
+    let _guard = TerminalGuard;
+
+    setup_ctrlc();
+
     let cli = Cli::parse();
+    check_interrupted();
+
     let base = base_url(&cli);
     match cli.command {
-        Commands::Use { repo_id } => cmd_use(&repo_id, &base),
+        Commands::Use { repo_id } => cmd_use(repo_id.as_deref(), &base),
         Commands::Active => cmd_active(&base),
         Commands::Repos => cmd_repos(&base),
         Commands::AddRepo { id, source_path } => cmd_add_repo(&id, &source_path, &base),

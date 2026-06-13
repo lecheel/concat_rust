@@ -1,3 +1,4 @@
+//--+ background.js
 // Open side panel when the extension action icon is clicked
 chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
@@ -13,10 +14,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === "fetchHash") {
     const hash = info.selectionText.trim();
     if (hash) {
-      chrome.storage.local.get(['host', 'port'], async (result) => {
+      chrome.storage.local.get(['host', 'port', 'activeRepo'], async (result) => {
         const host = result.host || '127.0.0.1';
         const port = result.port || '7890';
-        const paramsStr = `hash=${encodeURIComponent(hash)}`;
+        const activeRepo = result.activeRepo || '';
+        let paramsStr = `hash=${encodeURIComponent(hash)}`;
+        if (activeRepo) paramsStr += `&repo=${encodeURIComponent(activeRepo)}`;
         try {
           await fetchAndPaste(host, port, paramsStr);
         } catch (err) {
@@ -52,6 +55,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
+
+  if (message.action === 'fetchActiveRepo') {
+    const host = message.host || '127.0.0.1';
+    const port = message.port || '7890';
+    const url = `http://${host}:${port}/active`;
+    fetch(url)
+      .then(resp => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return resp.text();
+      })
+      .then(text => {
+        const repo = text.trim();
+        sendResponse({ success: true, repo });
+      })
+      .catch(err => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
 });
 
 async function fetchAndPaste(host, port, paramsStr, options = {}) {
@@ -59,6 +79,9 @@ async function fetchAndPaste(host, port, paramsStr, options = {}) {
   const params = new URLSearchParams(paramsStr);
   let clipboardContent = '';
   const summaries = [];
+
+  const repo = params.get('repo') || '';
+  const repoQuery = repo ? `?repo=${encodeURIComponent(repo)}` : '';
 
   async function fetchUrl(url, label) {
     const response = await fetch(url);
@@ -73,14 +96,16 @@ async function fetchAndPaste(host, port, paramsStr, options = {}) {
 
   try {
     if (params.has('skeleton')) {
-      const repo = params.get('repo') || '';
-      const url = repo ? `${baseUrl}/skeleton?repo=${encodeURIComponent(repo)}` : `${baseUrl}/skeleton`;
+      const repoParam = params.get('repo') || '';
+      const url = repoParam
+        ? `${baseUrl}/skeleton?repo=${encodeURIComponent(repoParam)}`
+        : `${baseUrl}/skeleton`;
       await fetchUrl(url, 'SKELETON (full output)');
     } else {
       const hashes = params.getAll('hash');
       if (hashes.length > 0) {
         const hashQuery = hashes.join('+');
-        const resp = await fetch(`${baseUrl}/${hashQuery}`);
+        const resp = await fetch(`${baseUrl}/${hashQuery}${repoQuery}`);
         if (!resp.ok) {
           throw new Error(`Hashes query failed (HTTP ${resp.status})`);
         }
@@ -106,7 +131,7 @@ async function fetchAndPaste(host, port, paramsStr, options = {}) {
 
       for (const filepath of params.getAll('file')) {
         const safePath = filepath.split('/').map(encodeURIComponent).join('/');
-        await fetchUrl(`${baseUrl}/file/${safePath}`, filepath);
+        await fetchUrl(`${baseUrl}/file/${safePath}${repoQuery}`, filepath);
       }
     }
 
@@ -130,10 +155,8 @@ function pasteAndCopyToClipboardInPage(textToPaste, options = {}) {
   const pasteAsFile = options.pasteAsFile;
   const filename = options.filename || 'file.rs';
 
-  // Always write to the OS clipboard as a safety backup
   navigator.clipboard.writeText(textToPaste).catch(() => {});
 
-  // 1. Programmatic File Input upload pathway
   if (pasteAsFile) {
     const fileInput = document.querySelector('input[type="file"]');
     if (fileInput) {
@@ -141,10 +164,8 @@ function pasteAndCopyToClipboardInPage(textToPaste, options = {}) {
         const dt = new DataTransfer();
         dt.items.add(new File([textToPaste], filename, { type: 'text/plain' }));
         fileInput.files = dt.files;
-        
-        // Dispatch bubbling change event so the page framework (React/Vue/etc.) handles the attachment
         fileInput.dispatchEvent(new Event('change', { bubbles: true }));
-        return; // Success, file attached programmatically!
+        return;
       } catch (err) {
         console.warn("Failed file input upload, falling back to text paste:", err);
       }
@@ -153,7 +174,6 @@ function pasteAndCopyToClipboardInPage(textToPaste, options = {}) {
     }
   }
 
-  // 2. Fallback: Standard text insertion
   let target = document.activeElement;
   let isEditable = target && (
     target.isContentEditable ||

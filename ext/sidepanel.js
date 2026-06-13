@@ -1,5 +1,6 @@
 // Global placeholder for retrieved data to bind to the drag payload
 let currentFetchedText = '';
+let activeRepo = ''; // Global active repository state
 
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -14,14 +15,23 @@ document.addEventListener('DOMContentLoaded', () => {
   }
    
   function updateHeaderTitle() {
-    const activeRepoInput = document.getElementById('activeRepo');
     const headerTitle = document.getElementById('headerTitle');
     if (!headerTitle) return;
 
-    const repo = activeRepoInput ? activeRepoInput.value.trim() : '';
-    headerTitle.textContent = repo
-      ? `Concat Rust Paster (${repo})`
+    headerTitle.textContent = activeRepo
+      ? `Concat Rust Paster (${activeRepo})`
       : 'Concat Rust Paster';
+  }
+
+  function setActiveRepo(repo) {
+    activeRepo = repo;
+    chrome.storage.local.set({ activeRepo: repo });
+    const activeRepoText = document.getElementById('activeRepoText');
+    if (activeRepoText) {
+      activeRepoText.textContent = repo ? repo : 'None';
+    }
+    updateHeaderTitle();
+    highlightActiveChip();
   }
 
   let skeletonChecked = false;
@@ -72,35 +82,29 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const hostInput = document.getElementById('host');
   const portInput = document.getElementById('port');
-  const activeRepoInput = document.getElementById('activeRepo');
 
   chrome.storage.local.get(['host', 'port', 'activeRepo'], (result) => {
     if (result.host && hostInput) hostInput.value = result.host;
     if (result.port && portInput) portInput.value = result.port;
-    if (result.activeRepo && activeRepoInput) activeRepoInput.value = result.activeRepo;
-    updateHeaderTitle();
+    if (result.activeRepo) {
+      setActiveRepo(result.activeRepo);
+    } else {
+      setActiveRepo('');
+    }
     loadRepos();
   });
 
-  ['host', 'port', 'activeRepo'].forEach(id => {
+  ['host', 'port'].forEach(id => {
     const inputEl = document.getElementById(id);
     if (inputEl) {
       inputEl.addEventListener('change', () => {
         chrome.storage.local.set({
           host: hostInput ? hostInput.value : '127.0.0.1',
-          port: portInput ? portInput.value : '7890',
-          activeRepo: activeRepoInput ? activeRepoInput.value.trim() : ''
+          port: portInput ? portInput.value : '7890'
         });
       });
     }
   });
-
-  if (activeRepoInput) {
-    activeRepoInput.addEventListener('input', () => {
-      updateHeaderTitle();
-      highlightActiveChip();
-    });
-  }
 
   const refreshBtn = document.getElementById('refreshRepos');
   if (refreshBtn) {
@@ -117,11 +121,8 @@ document.addEventListener('DOMContentLoaded', () => {
       
       e.dataTransfer.clearData();
 
-      // 1. Resolve dynamic target filename (Skeleton set to .txt)
       let filename = 'skeleton.txt';
       const isSkeleton = document.getElementById('skeletonBox')?.classList.contains('checked') || false;
-      const activeRepoInput = document.getElementById('activeRepo');
-      const activeRepo = activeRepoInput ? activeRepoInput.value.trim() : '';
 
       if (isSkeleton) {
         filename = activeRepo ? `${activeRepo}_skeleton.txt` : 'skeleton.txt';
@@ -171,44 +172,63 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  async function loadRepos() {
-    const btn = document.getElementById('refreshRepos');
-    const chipsContainer = document.getElementById('repoChips');
-    if (!btn || !chipsContainer) return;
 
-    const host = (hostInput ? hostInput.value.trim() : '') || '127.0.0.1';
-    const port = (portInput ? portInput.value.trim() : '') || '7890';
+async function loadRepos() {
+  const btn = document.getElementById('refreshRepos');
+  const chipsContainer = document.getElementById('repoChips');
+  const activeRepoText = document.getElementById('activeRepoText');
+  if (!btn || !chipsContainer) return;
 
-    btn.classList.add('spinning');
-    btn.textContent = '…';
+  const host = (hostInput ? hostInput.value.trim() : '') || '127.0.0.1';
+  const port = (portInput ? portInput.value.trim() : '') || '7890';
 
-    try {
-      const response = await chrome.runtime.sendMessage({
-        action: 'fetchRepos',
-        host,
-        port
-      });
+  btn.classList.add('spinning');
+  btn.textContent = '…';
+  if (activeRepoText) activeRepoText.textContent = 'fetching...';
 
-      if (response && response.success && Array.isArray(response.data)) {
-        renderRepoChips(response.data);
-      } else {
-        const errMsg = response ? response.error : 'Unknown error';
-        chipsContainer.innerHTML = `<span class="repo-chips-empty">⚠ ${escapeHtml(errMsg)}</span>`;
-      }
-    } catch (err) {
-      chipsContainer.innerHTML = `<span class="repo-chips-empty">⚠ ${escapeHtml(err.message)}</span>`;
-    } finally {
-      btn.classList.remove('spinning');
-      btn.textContent = '↻';
+  let detectedActiveRepo = '';
+
+  try {
+    // 1. Fetch the absolute active repo directly from the /active endpoint
+    const activeResponse = await chrome.runtime.sendMessage({
+      action: 'fetchActiveRepo',
+      host,
+      port
+    });
+    
+    if (activeResponse && activeResponse.success && activeResponse.repo) {
+      detectedActiveRepo = activeResponse.repo;
     }
+
+    // Set the state immediately based on /active output
+    setActiveRepo(detectedActiveRepo);
+
+    // 2. Fetch the repos list strictly to render the clickable chips
+    const response = await chrome.runtime.sendMessage({
+      action: 'fetchRepos',
+      host,
+      port
+    });
+
+    if (response && response.success && Array.isArray(response.data)) {
+      renderRepoChips(response.data);        
+    } else {
+      const errMsg = response ? response.error : 'Unknown error';
+      chipsContainer.innerHTML = `<span class="repo-chips-empty">⚠ ${escapeHtml(errMsg)}</span>`;
+    }
+  } catch (err) {
+    chipsContainer.innerHTML = `<span class="repo-chips-empty">⚠ ${escapeHtml(err.message)}</span>`;
+    if (activeRepoText) activeRepoText.textContent = 'Error';
+  } finally {
+    btn.classList.remove('spinning');
+    btn.textContent = '↻';
   }
+}
+
 
   function renderRepoChips(repos) {
     const chipsContainer = document.getElementById('repoChips');
-    const activeRepoInput = document.getElementById('activeRepo');
-    if (!chipsContainer || !activeRepoInput) return;
-
-    const currentRepo = activeRepoInput.value.trim();
+    if (!chipsContainer) return;
 
     if (repos.length === 0) {
       chipsContainer.innerHTML = '<span class="repo-chips-empty">No repos registered. Use: cli add-repo &lt;id&gt; &lt;path&gt;</span>';
@@ -222,20 +242,14 @@ document.addEventListener('DOMContentLoaded', () => {
       const files = repo.file_count != null ? repo.file_count : '?';
 
       const chip = document.createElement('div');
-      chip.className = 'repo-chip' + (id === currentRepo ? ' active' : '');
+      chip.className = 'repo-chip' + (id === activeRepo ? ' active' : '');
       chip.dataset.repoId = id;
       chip.title = `${id} [${branch}] (${files} files)`;
       chip.innerHTML = `${escapeHtml(id)} <span class="chip-branch">${escapeHtml(branch)}</span>`;
 
       chip.addEventListener('click', () => {
-        if (activeRepoInput.value.trim() === id) {
-          activeRepoInput.value = '';
-        } else {
-          activeRepoInput.value = id;
-        }
-        chrome.storage.local.set({ activeRepo: activeRepoInput.value.trim() });
-        updateHeaderTitle();
-        highlightActiveChip();
+        const nextRepo = (activeRepo === id) ? '' : id;
+        setActiveRepo(nextRepo);
       });
 
       chipsContainer.appendChild(chip);
@@ -244,13 +258,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
   function highlightActiveChip() {
     const chipsContainer = document.getElementById('repoChips');
-    const activeRepoInput = document.getElementById('activeRepo');
-    if (!chipsContainer || !activeRepoInput) return;
+    if (!chipsContainer) return;
 
-    const currentRepo = activeRepoInput.value.trim();
     const chips = chipsContainer.querySelectorAll('.repo-chip');
     chips.forEach(chip => {
-      chip.classList.toggle('active', chip.dataset.repoId === currentRepo);
+      chip.classList.toggle('active', chip.dataset.repoId === activeRepo);
     });
   }
 
@@ -301,11 +313,8 @@ document.addEventListener('DOMContentLoaded', () => {
           if (skeletonChecked && skeletonRow) skeletonRow.click();
         }
 
-        if (parsed.repo && activeRepoInput) {
-          activeRepoInput.value = parsed.repo;
-          chrome.storage.local.set({ activeRepo: parsed.repo });
-          updateHeaderTitle();
-          highlightActiveChip();
+        if (parsed.repo) {
+          setActiveRepo(parsed.repo);
         }
       }
     });
@@ -361,42 +370,44 @@ async function doFetch() {
   const filesInput  = document.getElementById('files');
   const hostInput   = document.getElementById('host');
   const portInput   = document.getElementById('port');
-  const activeRepoInput = document.getElementById('activeRepo');
 
   const hashesText = hashesInput ? hashesInput.value : '';
   const filesText  = filesInput ? filesInput.value : '';
   let host = (hostInput ? hostInput.value.trim() : '') || '127.0.0.1';
   let port = (portInput ? portInput.value.trim() : '') || '7890';
-  const activeRepo = activeRepoInput ? activeRepoInput.value.trim() : '';
 
   const params = new URLSearchParams();
-  const skeletonChecked = document.getElementById('skeletonBox')?.classList.contains('checked') || false;
-
-  // Read toggle state directly from DOM
+  let isSkeleton = document.getElementById('skeletonBox')?.classList.contains('checked') || false;
   const pasteFileChecked = document.getElementById('pasteFileBox')?.classList.contains('checked') || false;
 
-  // Resolve target file name (Skeleton set to .txt)
+  const hashes = hashesText.split(/[\r\n\s,]+/)
+    .map(h => h.trim().replace(/^hash[:=]/i, ''))
+    .filter(Boolean);
+
+  const rawFiles = filesText.split(/[\s,]+/).map(f => f.trim()).filter(Boolean);
+  const resolvedFiles = rawFiles.map(f => resolvePath(f, activeRepo));
+
+  if (hashes.length === 0 && resolvedFiles.length === 0 && activeRepo) {
+    isSkeleton = true;
+  }
+
+  if (hashes.length === 0 && resolvedFiles.length === 0 && !isSkeleton) {
+    setStatus('error', 'Add at least one hash, file path, or select an active repo.');
+    return;
+  }
+
+  if (activeRepo) {
+    params.set('repo', activeRepo);
+  }
+
   let filename = 'skeleton.txt';
-  if (skeletonChecked) {
+  if (isSkeleton) {
     params.set('skeleton', 'true');
-    if (activeRepo) params.set('repo', activeRepo);
     filename = activeRepo ? `${activeRepo}_skeleton.txt` : 'skeleton.txt';
   } else {
-    const hashes = hashesText.split(/[\r\n\s,]+/)
-      .map(h => h.trim().replace(/^hash[:=]/i, ''))
-      .filter(Boolean);
-
-    const rawFiles = filesText.split(/[\s,]+/).map(f => f.trim()).filter(Boolean);
-    const resolvedFiles = rawFiles.map(f => resolvePath(f, activeRepo));
-
-    if (hashes.length === 0 && resolvedFiles.length === 0) {
-      setStatus('error', 'Add at least one hash, file path, or enable skeleton.');
-      return;
-    }
     hashes.forEach(h => params.append('hash', h));
     resolvedFiles.forEach(f => params.append('file', f));
 
-    // Name the file after the target or block hash
     if (rawFiles.length > 0) {
       filename = rawFiles[0].split('/').pop() || 'file.rs';
     } else if (hashes.length > 0) {
@@ -418,11 +429,12 @@ async function doFetch() {
       host,
       port,
       params: params.toString(),
-      pasteAsFile: pasteFileChecked,  // Pass setting parsed from DOM
-      filename: filename              // Pass filename
+      pasteAsFile: pasteFileChecked,
+      filename: filename
     });
 
     if (response && response.success) {
+      currentFetchedText = response.text || '';
       const items = response.summaries.map(s =>
         `<div class="status-item">✓ <span>${escapeHtml(s)}</span></div>`
       ).join('');

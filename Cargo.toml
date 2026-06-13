@@ -23,3 +23,5 @@ syn = { version = "2", features = ["full", "visit"] }
 quote = "1"
 proc-macro2 = { version = "1", features = ["span-locations"] }
 tempfile = "3"
+dialoguer = "0.11"
+ctrlc = "3.4"

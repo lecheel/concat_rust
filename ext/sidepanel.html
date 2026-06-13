@@ -77,8 +77,6 @@
     .addr-sep { color: #bbb; flex-shrink: 0; font-weight: 600; }
 
     /* ── Repo section ── */
-    .repo-header { display: flex; align-items: center; gap: 6px; }
-    .repo-header input[type="text"] { flex: 1; min-width: 0; }
     .btn-icon {
       width: 30px; height: 30px;
       border-radius: 7px;
@@ -94,34 +92,6 @@
     .btn-icon:hover { background: #eee; border-color: #ccc; }
     .btn-icon:active { transform: scale(0.95); }
     .btn-icon.spinning { pointer-events: none; opacity: 0.6; }
-
-    .drag-chip {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      padding: 10px;
-      margin-top: 5px;
-      background: #f0faf4;
-      border: 1.5px dashed #b2dfc4;
-      border-radius: 7px;
-      color: #1d6b3e;
-      font-weight: 600;
-      cursor: grab;
-      user-select: none;
-      transition: background .15s, border-color .15s;
-    }
-    .drag-chip:hover {
-      background: #e6f7ed;
-      border-color: #9cdcb4;
-    }
-    .drag-chip:active {
-      cursor: grabbing;
-    }
-    .drag-icon {
-      font-size: 15px;
-      line-height: 1;
-    }
 
     .repo-chips {
       display: flex;
@@ -296,36 +266,33 @@
 
   <div class="divider"></div>
 
-  <!-- Skeleton toggle -->
+  <!-- Options -->
+  <div class="section">
+    <span class="label">⚙ Options</span>
 
-<!-- Replace the options section in sidepanel.html -->
-<div class="section">
-  <span class="label">⚙ Options</span>
-  
-  <!-- Skeleton Toggle -->
-  <label class="toggle-row" id="skeletonRow">
-    <div class="toggle-box" id="skeletonBox"></div>
-    <div>
-      <div class="toggle-text">Fetch skeleton</div>
-      <div class="toggle-sub">Returns full daemon output — ignores hashes &amp; files</div>
-    </div>
-  </label>
+    <!-- Skeleton Toggle -->
+    <label class="toggle-row" id="skeletonRow">
+      <div class="toggle-box" id="skeletonBox"></div>
+      <div>
+        <div class="toggle-text">Fetch skeleton</div>
+        <div class="toggle-sub">Returns full daemon output — ignores hashes &amp; files</div>
+      </div>
+    </label>
 
-  <!-- Paste as File Toggle (New) -->
-  <label class="toggle-row" id="pasteFileRow" style="margin-top: 6px;">
-    <div class="toggle-box" id="pasteFileBox"></div>
-    <div>
-      <div class="toggle-text">Paste as file attachment</div>
-      <div class="toggle-sub">Uploads directly to chat input as a file card</div>
-    </div>
-  </label>
-</div>
+    <!-- Paste as File Toggle -->
+    <label class="toggle-row" id="pasteFileRow" style="margin-top: 6px;">
+      <div class="toggle-box" id="pasteFileBox"></div>
+      <div>
+        <div class="toggle-text">Paste as file attachment</div>
+        <div class="toggle-sub">Uploads directly to chat input as a file card</div>
+      </div>
+    </label>
+  </div>
 
   <!-- Active repo -->
   <div class="section">
-    <span class="label">📦 Active repo</span>
-    <div class="repo-header">
-      <input type="text" id="activeRepo" placeholder="type or click below" spellcheck="false">
+    <div class="section-label">
+      <span class="label">📦 Active repo</span>
       <button class="btn-icon" id="refreshRepos" title="Fetch repos from daemon">↻</button>
     </div>
     <div class="repo-chips" id="repoChips">
@@ -348,7 +315,6 @@
     <span id="fetchBtnIcon">▶</span>
     <span id="fetchBtnLabel">Fetch &amp; Paste</span>
   </button>
-
 
   <!-- Status -->
   <div class="status-box" id="statusBox">

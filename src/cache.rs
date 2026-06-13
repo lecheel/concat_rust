@@ -13,7 +13,7 @@ pub const DEFAULT_META_PROMPT: &str = "\n===\n\
      - If you need a specific block, include its HASH (e.g., /* HASH:1a12fb93 [183 LOC] */).\n\
      - A brief reason (e.g., “to know the fields of AppState”, “to see how sync is implemented”).\n\
      \n\
-     please ASKing using 'cli' like this in single for all\n\
+     please ASKing using 'cli' tool like this in single for all\n\
      cli <path1> <path2> hash1 hash2         → fetch all in once\n\
      Do not guess or stub missing implementations.\n\
      Do not proceed until you have received all requested code.\n\
