@@ -17,6 +17,7 @@ Most real-world Rust codebases are too large for free-tier web-based AI chats (s
 ![image](./concat2.png)
 ![image](./concat4.png)
 ![image](./concat5.png)
+![image](./deepseek.png)
 ---
 
 ## Key Features in v2
