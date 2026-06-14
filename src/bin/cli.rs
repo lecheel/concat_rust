@@ -626,8 +626,43 @@ fn cmd_remove_repo(id: &str, base: &str) {
     }
 }
 
-fn cmd_sync(_repo: Option<&str>, base: &str) {
-    let url = format!("{}/sync", base);
+fn cmd_sync(repo: Option<&str>, base: &str) {
+    let repo_id = match repo {
+        Some(id) => id.to_string(),
+        None => {
+            let cwd = match std::env::current_dir() {
+                Ok(p) => p,
+                Err(_) => {
+                    eprintln!("❌ Cannot determine current directory");
+                    return;
+                }
+            };
+            let cwd_str = cwd.display().to_string();
+            let body = serde_json::json!({ "path": cwd_str });
+
+            match post_json(&format!("{}/resolve", base), &body) {
+                Ok(resp) => match serde_json::from_str::<serde_json::Value>(&resp) {
+                    Ok(data) => match data["id"].as_str() {
+                        Some(id) => id.to_string(),
+                        None => {
+                            eprintln!("❌ Not inside a registered repo. Use: cli sync <repo-id>");
+                            return;
+                        }
+                    },
+                    Err(_) => {
+                        eprintln!("❌ Not inside a registered repo. Use: cli sync <repo-id>");
+                        return;
+                    }
+                },
+                Err(_) => {
+                    eprintln!("❌ Not inside a registered repo. Use: cli sync <repo-id>");
+                    return;
+                }
+            }
+        }
+    };
+
+    let url = format!("{}/sync/{}", base, repo_id);
     match post_text(&url) {
         Ok(msg) => println!("🔄 {}", msg),
         Err(e) => eprintln!("❌ {}", e),
