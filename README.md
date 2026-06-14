@@ -13,11 +13,11 @@ Most real-world Rust codebases are too large for free-tier web-based AI chats (s
 2. An **on-demand retrieval daemon** that lets you fetch and paste exact implementations (either raw files or specific AST bodies) only when the model requests them.
 
 ---
-![image](./concat3.png)
-![image](./concat2.png)
-![image](./concat4.png)
-![image](./concat5.png)
-![image](./deepseek.png)
+![image](./res/concat3.png)
+![image](./res/concat2.png)
+![image](./res/concat4.png)
+![image](./res/concat5.png)
+![image](./res/deepseek.png)
 ---
 
 ## Key Features in v2
