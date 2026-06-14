@@ -1,0 +1,111 @@
+[skill]
+name = "concat-rust"
+version = "1.0.0"
+description = "concat_rust daemon to retrieve code context"
+# When to activate (shown to LLM in system prompt, and used for :skill list)
+triggers = [
+    "what's active repo",
+    "impl xxx feature or bugfix"
+    "get code from active repo",
+    "show me the skeleton",
+    "read file from repo",
+    "get the catalog",
+    "what's the meta-prompt",
+]
+
+# System prompt file (relative to skill dir)
+system_prompt = "system.md"
+
+# Optional: extra context docs to include in the system prompt
+context_files = ["SKILL.md"]
+
+# Optional: config keys this skill reads
+config_keys = ["concat_port"]
+
+[config_defaults]
+concat_host = "127.0.0.1"
+concat_port = 7890
+
+# ── Tool Definitions ──────────────────────────────────────────
+
+[[tools]]
+name = "repos"
+description = "List all registered repositories in the concat_rust daemon"
+# No parameters needed
+executor = "http"
+[tools.exec]
+method = "GET"
+path = "/repos"
+
+[[tools]]
+name = "skeleton"
+description = "Get the compressed skeleton view of all indexed code. Use this first to understand codebase structure."
+executor = "http"
+[tools.exec]
+method = "GET"
+path = "/skeleton"
+
+[[tools]]
+name = "catalog"
+description = "Get all indexed files with LOC and sizes"
+executor = "http"
+[tools.exec]
+method = "GET"
+path = "/catalog"
+
+[[tools]]
+name = "meta_prompt"
+description = "Get the instruction meta-prompt from the concat_rust daemon"
+executor = "http"
+[tools.exec]
+method = "GET"
+path = "/meta-prompt"
+
+[[tools]]
+name = "read_file"
+description = "Read the full content of a file from the indexed repository"
+executor = "http"
+[tools.exec]
+method = "GET"
+path = "/file/{path}"
+[tools.parameters]
+path = { type = "string", description = "Comma-separated file paths relative to repo root (e.g., 'src/main.rs,src/db.rs')", required = true }
+
+[[tools]]
+name = "read_hash"
+description = "Read a code body by its content hash (deduplicated block)"
+executor = "http"
+[tools.exec]
+method = "GET"
+path = "/{hash}"
+[tools.parameters]
+hash = { type = "string", description = "SHA content hash of the code block", required = true }
+
+[[tools]]
+name = "hash_info"
+description = "Get metadata for a specific hash"
+executor = "http"
+[tools.exec]
+method = "GET"
+path = "/info/{hash}"
+[tools.parameters]
+hash = { type = "string", description = "SHA content hash", required = true }
+
+[[tools]]
+name = "file_info"
+description = "Get metadata for a specific file path"
+executor = "http"
+[tools.exec]
+method = "GET"
+path = "/file-info/{path}"
+[tools.parameters]
+path = { type = "string", description = "File path", required = true }
+
+# NEW: Active repository endpoint
+[[tools]]
+name = "active_repo"
+description = "Get the currently active repository from the concat_rust daemon"
+executor = "http"
+[tools.exec]
+method = "GET"
+path = "/active"
