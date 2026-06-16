@@ -219,6 +219,132 @@
 
     /* ── Dimmed state ── */
     .dimmed { opacity: .35; pointer-events: none; }
+
+    /* ══════════════════════════════════════════════════════════════
+       ── Dark Theme (Auto-detects OS/Browser setting) ──
+       ══════════════════════════════════════════════════════════════ */
+    @media (prefers-color-scheme: dark) {
+      body {
+        background: #1a1a1a;
+        color: #e0e0e0;
+      }
+      .header {
+        border-bottom-color: #333;
+      }
+      .header-icon {
+        background: #2a2a2a;
+        border-color: #3a3a3a;
+      }
+      .header-sub {
+        color: #888;
+      }
+      .label {
+        color: #aaa;
+      }
+      .btn-clear {
+        color: #666;
+      }
+      .btn-clear:hover {
+        color: #bbb;
+        background: #2a2a2a;
+      }
+      textarea, input[type="text"], input[type="number"] {
+        background: #242424;
+        border-color: #3a3a3a;
+        color: #e0e0e0;
+      }
+      textarea:focus, input:focus {
+        border-color: #666;
+        box-shadow: 0 0 0 2px rgba(255,255,255,0.06);
+      }
+      .field-hint {
+        color: #666;
+      }
+      .addr-sep {
+        color: #555;
+      }
+      .btn-icon {
+        border-color: #3a3a3a;
+        background: #242424;
+        color: #aaa;
+      }
+      .btn-icon:hover {
+        background: #333;
+        border-color: #555;
+      }
+      .repo-chip {
+        border-color: #3a3a3a;
+        background: #242424;
+        color: #aaa;
+      }
+      .repo-chip:hover {
+        background: #333;
+        border-color: #555;
+      }
+      .repo-chip.active {
+        background: #e0e0e0;
+        border-color: #e0e0e0;
+        color: #1a1a1a;
+      }
+      .repo-chip .chip-branch {
+        color: #666;
+      }
+      .repo-chip.active .chip-branch {
+        color: #555;
+      }
+      .repo-chips-empty {
+        color: #555;
+      }
+      .toggle-row {
+        background: #242424;
+        border-color: #3a3a3a;
+      }
+      .toggle-row:hover {
+        background: #2d2d2d;
+      }
+      .toggle-box {
+        border-color: #555;
+        background: #1a1a1a;
+      }
+      .toggle-box.checked {
+        background: #e0e0e0;
+        border-color: #e0e0e0;
+        color: #1a1a1a;
+      }
+      .toggle-sub {
+        color: #666;
+      }
+      .divider {
+        background: #333;
+      }
+      .fetch-btn {
+        border-color: #3a3a3a;
+        background: #242424;
+        color: #e0e0e0;
+      }
+      .fetch-btn:hover {
+        background: #2d2d2d;
+      }
+      .status-box.loading {
+        background: #242424;
+        border-color: #3a3a3a;
+        color: #aaa;
+      }
+      .status-box.success {
+        background: #132613;
+        border-color: #2d5a2d;
+        color: #6bc76b;
+      }
+      .status-box.error {
+        background: #2e1a1a;
+        border-color: #5a2d2d;
+        color: #e06060;
+      }
+      .spinner {
+        border-color: #3a3a3a;
+        border-top-color: #aaa;
+      }
+    }
   </style>
 </head>
 <body>
