@@ -1,6 +1,6 @@
-// === src/daemon/state.rs ===
 pub use crate::registry::RepoRegistry;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -23,4 +23,7 @@ pub struct AppState {
     pub daemon_port: u16,
     pub no_format: bool,
     pub max_width: i32,
+    pub skeleton_loc: Arc<AtomicUsize>,
+    pub file_loc: Arc<AtomicUsize>,
+    pub hash_loc: Arc<AtomicUsize>,
 }

@@ -160,6 +160,13 @@ pub async fn get_skeleton(
     let skeleton =
         db.assemble_full_skeleton_response(state.daemon_port, repo_param.as_str(), &repo_ids);
     let loc = skeleton.lines().count();
+
+    state
+        .skeleton_loc
+        .store(loc, std::sync::atomic::Ordering::SeqCst);
+    state.file_loc.store(0, std::sync::atomic::Ordering::SeqCst);
+    state.hash_loc.store(0, std::sync::atomic::Ordering::SeqCst);
+
     build_response(
         StatusCode::OK,
         vec![("x-loc", loc.to_string()), ("x-repo", repo_param)],
@@ -419,7 +426,6 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
         } else {
             None
         };
-
         if resolved_key.is_none() {
             for repo in &repo_ids {
                 let candidate = format!("{}/{}", repo, path);
@@ -431,16 +437,18 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
         }
         if let Some(key) = resolved_key {
             if let Some(entry) = db.files.get(&key).cloned() {
-                // Increment file hit counter
                 let hits = db.file_hits.entry(key.clone()).or_insert(0);
                 *hits += 1;
                 let _ = db.save();
-
+                let file_loc = entry.loc;
+                state
+                    .file_loc
+                    .fetch_add(file_loc, std::sync::atomic::Ordering::SeqCst);
                 return build_response(
                     StatusCode::OK,
                     vec![
                         ("content-type", "text/plain; charset=utf-8".to_string()),
-                        ("x-loc", entry.loc.to_string()),
+                        ("x-loc", file_loc.to_string()),
                         ("x-byte-size", entry.byte_size.to_string()),
                         ("x-source", "cache".to_string()),
                         ("x-filepath", strip_repo_prefix(&key, &repo_ids)),
@@ -459,7 +467,6 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
             "Rust file not indexed yet. Run sync first.".to_string(),
         );
     }
-    // Non-Rust file
     let mut full_path = state.central_dir.join(&path);
     if !full_path.starts_with(&state.central_dir) || !full_path.exists() {
         for repo in &repo_ids {
@@ -480,6 +487,9 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
     match std::fs::read_to_string(&full_path) {
         Ok(content) => {
             let loc = content.lines().count();
+            state
+                .file_loc
+                .fetch_add(loc, std::sync::atomic::Ordering::SeqCst);
             let ext = path.rsplit('.').next().unwrap_or("txt");
             let content_type = match ext {
                 "json" => "application/json",
@@ -542,17 +552,19 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
         }
         if let Some(ref rh) = resolved_hash {
             if let Some(entry) = db.bodies.get(rh).cloned() {
-                // Increment hash hit counter
                 let hits = db.hash_hits.entry(rh.clone()).or_insert(0);
                 *hits += 1;
                 let _ = db.save();
-
                 let dp = strip_repo_prefix(&entry.meta.filepath, &repo_ids);
+                let body_loc = entry.meta.loc;
+                state
+                    .hash_loc
+                    .fetch_add(body_loc, std::sync::atomic::Ordering::SeqCst);
                 return build_response(
                     StatusCode::OK,
                     vec![
                         ("content-type", "text/plain; charset=utf-8".to_string()),
-                        ("x-loc", entry.meta.loc.to_string()),
+                        ("x-loc", body_loc.to_string()),
                         ("x-byte-size", entry.meta.byte_size.to_string()),
                         ("x-filepath", dp.clone()),
                         ("x-hash", rh.clone()),
@@ -575,11 +587,15 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
             1 => {
                 let (hash, entry) = matches[0];
                 let dp = strip_repo_prefix(&entry.meta.filepath, &repo_ids);
+                let body_loc = entry.meta.loc;
+                state
+                    .hash_loc
+                    .fetch_add(body_loc, std::sync::atomic::Ordering::SeqCst);
                 build_response(
                     StatusCode::OK,
                     vec![
                         ("content-type", "text/plain; charset=utf-8".to_string()),
-                        ("x-loc", entry.meta.loc.to_string()),
+                        ("x-loc", body_loc.to_string()),
                         ("x-byte-size", entry.meta.byte_size.to_string()),
                         ("x-filepath", dp.clone()),
                         ("x-hash", hash.clone()),
@@ -616,7 +632,6 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
     let mut total_loc = 0usize;
     let mut not_found = Vec::new();
     let mut matched_hashes = Vec::new();
-
     for h in hashes {
         if db.bodies.contains_key(h) {
             matched_hashes.push(h.to_string());
@@ -636,7 +651,6 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
             not_found.push(format!("{} (ambiguous)", h));
         }
     }
-
     if !not_found.is_empty() {
         return build_response(
             StatusCode::BAD_REQUEST,
@@ -644,7 +658,6 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
             format!("Hashes not found: {}", not_found.join(", ")),
         );
     }
-
     for rh in &matched_hashes {
         if let Some(entry) = db.bodies.get(rh).cloned() {
             total_loc += entry.meta.loc;
@@ -653,14 +666,14 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
                 "//--+ file:///{}\n// Hash: {}\n{}",
                 dp, rh, entry.body
             ));
-
-            // Increment count
             let hits = db.hash_hits.entry(rh.clone()).or_insert(0);
             *hits += 1;
         }
     }
+    state
+        .hash_loc
+        .fetch_add(total_loc, std::sync::atomic::Ordering::SeqCst);
     let _ = db.save();
-
     build_response(
         StatusCode::OK,
         vec![
@@ -668,6 +681,27 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
             ("x-loc", total_loc.to_string()),
         ],
         results.join("\n\n"),
+    )
+}
+
+pub async fn get_loc_info(State(state): State<AppState>) -> Response {
+    let skeleton_loc = state.skeleton_loc.load(std::sync::atomic::Ordering::SeqCst);
+    let file_loc = state.file_loc.load(std::sync::atomic::Ordering::SeqCst);
+    let hash_loc = state.hash_loc.load(std::sync::atomic::Ordering::SeqCst);
+    let total_loc = skeleton_loc + file_loc + hash_loc;
+
+    let json = serde_json::json!({
+        "skeleton_loc": skeleton_loc,
+        "file_loc": file_loc,
+        "hash_loc": hash_loc,
+        "total_loc": total_loc,
+    })
+    .to_string();
+
+    build_response(
+        StatusCode::OK,
+        vec![("content-type", "application/json".to_string())],
+        json,
     )
 }
 

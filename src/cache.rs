@@ -12,7 +12,7 @@ pub const DEFAULT_META_PROMPT: &str = "\n===\n\
      - The file path as shown in the skeleton header (e.g., src/main.rs).\n\
      - If you need a specific block, include its HASH (e.g., /* HASH:1a12fb93 [183 LOC] */).\n\
      - A brief reason (e.g., “to know the fields of AppState”, “to see how sync is implemented”).\n\
-     - use 'cli' tool for request the files and hash in single line in once\n\
+     - use 'cli' tool for request/asking files and hash in single line in once\n\
      \n\
      cli <path1> <path2> hash1 hash2  → fetch all in once\n\
      Do not guess or stub missing implementations.\n\

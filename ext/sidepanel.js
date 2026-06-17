@@ -1,6 +1,17 @@
 // Global placeholder for retrieved data to bind to the drag payload
 let currentFetchedText = '';
 let activeRepo = ''; // Global active repository state
+let lastTotalLoc = null; // Tracks the total LOC from the last fetch
+
+function updateHeaderTitle() {
+  const headerTitle = document.getElementById('headerTitle');
+  if (!headerTitle) return;
+
+  const locSuffix = lastTotalLoc != null ? ` [${lastTotalLoc} LOC]` : '';
+  headerTitle.textContent = activeRepo
+    ? `Concat Rust Paster (${activeRepo})${locSuffix}`
+    : `Concat Rust Paster${locSuffix}`;
+}
 
 document.addEventListener('DOMContentLoaded', () => {
 
@@ -12,15 +23,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const isChecked = pasteFileBox.classList.toggle('checked');
       pasteFileBox.textContent = isChecked ? '✓' : '';
     });
-  }
-   
-  function updateHeaderTitle() {
-    const headerTitle = document.getElementById('headerTitle');
-    if (!headerTitle) return;
-
-    headerTitle.textContent = activeRepo
-      ? `Concat Rust Paster (${activeRepo})`
-      : 'Concat Rust Paster';
   }
 
   function setActiveRepo(repo) {
@@ -438,9 +440,22 @@ async function doFetch() {
       const items = response.summaries.map(s =>
         `<div class="status-item">✓ <span>${escapeHtml(s)}</span></div>`
       ).join('');
+      
+      let locHtml = '';
+      if (response.locInfo) {
+        const li = response.locInfo;
+        lastTotalLoc = li.total_loc;
+        updateHeaderTitle(); // Update title with LOC suffix
+        
+        locHtml = `<div class="status-item">📊 LOC: ${li.skeleton_loc} (skel) + ${li.file_loc} (file) + ${li.hash_loc} (hash) = <strong>${li.total_loc}</strong></div>`;
+      } else {
+        lastTotalLoc = null;
+        updateHeaderTitle();
+      }
+      
       setStatus('success',
         `<div class="status-title">Copied to clipboard</div>` +
-        `<div class="status-items">${items}</div>`
+        `<div class="status-items">${items}${locHtml}</div>`
       );
     } else {
       const errMsg = response ? response.error : 'Unknown response error';

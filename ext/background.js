@@ -122,7 +122,19 @@ async function fetchAndPaste(host, port, paramsStr, options = {}) {
         args: [clipboardContent, { pasteAsFile: options.pasteAsFile, filename: options.filename }]
       });
     }
-    return { success: true, summaries };
+
+    // Fetch LOC info immediately after pasting
+    let locInfo = null;
+    try {
+      const locResp = await fetch(`${baseUrl}/loc-info`);
+      if (locResp.ok) {
+        locInfo = await locResp.json();
+      }
+    } catch (e) {
+      console.error("Failed to fetch loc-info", e);
+    }
+
+    return { success: true, summaries, text: clipboardContent, locInfo };
   } catch (err) {
     return { success: false, error: err.message };
   }
