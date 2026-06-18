@@ -57,8 +57,10 @@ fn interruptible_sleep(duration: std::time::Duration) -> bool {
 #[derive(Parser, Debug)]
 #[command(name = "concat_rust_cli", about = "CLI for the concat_rust daemon")]
 struct Cli {
+    // Made optional so running `cli` with no args defaults to `cli use`
     #[command(subcommand)]
-    command: Commands,
+    command: Option<Commands>,
+
     #[arg(long, default_value = "127.0.0.1", global = true)]
     host: String,
     #[arg(long, default_value_t = 7890, global = true)]
@@ -150,7 +152,6 @@ fn should_auto_prefix_src(path: &str) -> bool {
 }
 
 /// Detects if a path already starts with a repo-id prefix (e.g., "grab/src/main.rs").
-/// A repo prefix is a first path component that has no dot (not a filename extension) and isn't "src".
 fn has_repo_prefix(path: &str) -> bool {
     if let Some(slash_pos) = path.find('/') {
         let first = &path[..slash_pos];
@@ -282,40 +283,18 @@ fn fetch_repo_list(base: &str) -> Result<Vec<serde_json::Value>, String> {
         .ok_or_else(|| "Unexpected repos format".to_string())
 }
 
-fn cmd_use(repo_id: Option<&str>, base: &str) {
-    if let Some(id) = repo_id {
-        if id == "none" {
-            set_active_repo("none");
-            println!("○ no active repo  ·  paths are now fully qualified");
-            return;
-        }
-        let repos = match fetch_repo_list(base) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("❌ Failed to fetch repos: {}", e);
-                return;
-            }
-        };
-        if repos.iter().any(|r| r["id"].as_str() == Some(id)) {
-            set_active_repo(id);
-            println!("Active repo: {}", id);
-            println!("  Files will be looked up in repo '{}'", id);
-        } else {
-            eprintln!("❌ Unknown repo '{}'. Available:", id);
-            for r in &repos {
-                if let Some(rid) = r["id"].as_str() {
-                    eprintln!("  {}", rid);
-                }
-            }
-        }
-        return;
-    }
-
+/// Prompts the user to select a repo from a list using `dialoguer`.
+///
+/// Returns:
+/// - `Some(Some(id))` if a repo was selected.
+/// - `Some(None)` if "Clear active repo" was selected (only if `allow_clear` is true).
+/// - `None` if the user cancelled (ESC/q) or an error occurred.
+fn prompt_select_repo(base: &str, allow_clear: bool) -> Option<Option<String>> {
     let repos = match fetch_repo_list(base) {
         Ok(r) => r,
         Err(e) => {
             eprintln!("❌ Failed to fetch repos: {}", e);
-            return;
+            return None;
         }
     };
 
@@ -324,7 +303,7 @@ fn cmd_use(repo_id: Option<&str>, base: &str) {
         println!("  Add a repo:");
         println!("    cli add-repo myapp /path/to/project");
         println!("    cli add-repo myapp .");
-        return;
+        return None;
     }
 
     let active = get_active_repo();
@@ -351,18 +330,25 @@ fn cmd_use(repo_id: Option<&str>, base: &str) {
             let path = r["source_path"].as_str().unwrap_or("?");
             let files = r["file_count"].as_u64().unwrap_or(0);
             let is_active = active.as_deref() == Some(id);
-            let prefix = if is_active { "● " } else { "  " };
-            format!("{}{} [{}] ({} files) — {}", prefix, id, branch, files, path)
+
+            // Using single-char marker and fixed-width formatters for perfect alignment
+            let marker = if is_active { "●" } else { " " };
+            format!(
+                "{} {:<12} [{:<10}] {:>3} files  {}",
+                marker, id, branch, files, path
+            )
         })
         .collect();
-    items.push("Clear active repo".to_string());
+
+    if allow_clear {
+        items.push("✕ Clear active repo".to_string());
+    }
 
     let default_index = active
         .as_deref()
         .and_then(|a| sorted.iter().position(|r| r["id"].as_str() == Some(a)))
         .unwrap_or(0);
 
-    // CHANGED: Use interact_opt() to capture ESC/q actions cleanly
     let result = Select::new()
         .with_prompt("Select a repo")
         .items(&items)
@@ -375,27 +361,64 @@ fn cmd_use(repo_id: Option<&str>, base: &str) {
     match result {
         Ok(Some(idx)) => {
             if idx < repo_count {
-                // Selected a repo
-                if let Some(chosen) = sorted[idx]["id"].as_str() {
-                    set_active_repo(chosen);
-                    println!("✅ Active repo: {}", chosen);
-                    println!("  Files will be looked up in repo '{}'", chosen);
-                }
-            } else if idx == repo_count {
-                // "Clear active repo"
-                set_active_repo("none");
-                println!("Cleared active repo. Paths must be fully qualified.");
+                Some(sorted[idx]["id"].as_str().map(|s| s.to_string()))
+            } else if allow_clear && idx == repo_count {
+                Some(None) // Clear active repo
+            } else {
+                None
             }
-            // If idx == repo_count + 1 ("← Cancel"), we simply do nothing
         }
         Ok(None) => {
-            // User cancelled using ESC or 'q'
             println!("Cancelled.");
+            None
         }
         Err(_) => {
-            // ESC, Ctrl+C, or terminal error during dialoguer
             println!("Cancelled or interrupted.");
+            None
         }
+    }
+}
+
+fn cmd_use(repo_id: Option<&str>, base: &str) {
+    if let Some(id) = repo_id {
+        if id == "none" {
+            set_active_repo("none");
+            println!("○ no active repo  ·  paths are now fully qualified");
+            return;
+        }
+        let repos = match fetch_repo_list(base) {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("❌ Failed to fetch repos: {}", e);
+                return;
+            }
+        };
+        if repos.iter().any(|r| r["id"].as_str() == Some(id)) {
+            set_active_repo(id);
+            println!("✅ Active repo: {}", id);
+            println!("  Files will be looked up in repo '{}'", id);
+        } else {
+            eprintln!("❌ Unknown repo '{}'. Available:", id);
+            for r in &repos {
+                if let Some(rid) = r["id"].as_str() {
+                    eprintln!("  {}", rid);
+                }
+            }
+        }
+        return;
+    }
+
+    match prompt_select_repo(base, true) {
+        Some(Some(chosen)) => {
+            set_active_repo(&chosen);
+            println!("✅ Active repo: {}", chosen);
+            println!("  Files will be looked up in repo '{}'", chosen);
+        }
+        Some(None) => {
+            set_active_repo("none");
+            println!("Cleared active repo. Paths must be fully qualified.");
+        }
+        None => {}
     }
 }
 
@@ -640,23 +663,25 @@ fn cmd_sync(repo: Option<&str>, base: &str) {
             let cwd_str = cwd.display().to_string();
             let body = serde_json::json!({ "path": cwd_str });
 
-            match post_json(&format!("{}/resolve", base), &body) {
-                Ok(resp) => match serde_json::from_str::<serde_json::Value>(&resp) {
-                    Ok(data) => match data["id"].as_str() {
-                        Some(id) => id.to_string(),
-                        None => {
-                            eprintln!("❌ Not inside a registered repo. Use: cli sync <repo-id>");
-                            return;
-                        }
-                    },
-                    Err(_) => {
-                        eprintln!("❌ Not inside a registered repo. Use: cli sync <repo-id>");
+            let mut resolved_id = None;
+            if let Ok(resp) = post_json(&format!("{}/resolve", base), &body) {
+                if let Ok(data) = serde_json::from_str::<serde_json::Value>(&resp) {
+                    if let Some(id) = data["id"].as_str() {
+                        resolved_id = Some(id.to_string());
+                    }
+                }
+            }
+
+            if let Some(id) = resolved_id {
+                id
+            } else {
+                eprintln!("⚠️ Not inside a registered repo. Please select one manually.");
+                match prompt_select_repo(base, false) {
+                    Some(Some(id)) => id,
+                    _ => {
+                        println!("Sync cancelled.");
                         return;
                     }
-                },
-                Err(_) => {
-                    eprintln!("❌ Not inside a registered repo. Use: cli sync <repo-id>");
-                    return;
                 }
             }
         }
@@ -962,27 +987,31 @@ fn main() {
 
     let base = base_url(&cli);
     match cli.command {
-        Commands::Use { repo_id } => cmd_use(repo_id.as_deref(), &base),
-        Commands::Active => cmd_active(&base),
-        Commands::Repos => cmd_repos(&base),
-        Commands::AddRepo { id, source_path } => cmd_add_repo(&id, &source_path, &base),
-        Commands::RemoveRepo { id } => cmd_remove_repo(&id, &base),
-        Commands::Sync { repo } => cmd_sync(repo.as_deref(), &base),
-        Commands::Catalog { repo } => cmd_catalog(repo.as_deref(), &base),
-        Commands::Skeleton { repo, output } => {
-            cmd_skeleton(repo.as_deref(), &base, cli.warn_loc, output.as_deref())
-        }
-        Commands::File { paths } => cmd_file(&paths, &base, cli.warn_loc),
-        Commands::Hash { hashes } => cmd_hash(&hashes, &base, cli.warn_loc),
-        Commands::Info { target, file } => cmd_info(&target, file, &base),
-        Commands::Prompt {
-            output,
-            instruction,
-        } => cmd_prompt(
-            &base,
-            cli.warn_loc,
-            output.as_deref(),
-            instruction.as_deref(),
-        ),
+        // If no command is provided, default to interactive `cli use`
+        None => cmd_use(None, &base),
+        Some(cmd) => match cmd {
+            Commands::Use { repo_id } => cmd_use(repo_id.as_deref(), &base),
+            Commands::Active => cmd_active(&base),
+            Commands::Repos => cmd_repos(&base),
+            Commands::AddRepo { id, source_path } => cmd_add_repo(&id, &source_path, &base),
+            Commands::RemoveRepo { id } => cmd_remove_repo(&id, &base),
+            Commands::Sync { repo } => cmd_sync(repo.as_deref(), &base),
+            Commands::Catalog { repo } => cmd_catalog(repo.as_deref(), &base),
+            Commands::Skeleton { repo, output } => {
+                cmd_skeleton(repo.as_deref(), &base, cli.warn_loc, output.as_deref())
+            }
+            Commands::File { paths } => cmd_file(&paths, &base, cli.warn_loc),
+            Commands::Hash { hashes } => cmd_hash(&hashes, &base, cli.warn_loc),
+            Commands::Info { target, file } => cmd_info(&target, file, &base),
+            Commands::Prompt {
+                output,
+                instruction,
+            } => cmd_prompt(
+                &base,
+                cli.warn_loc,
+                output.as_deref(),
+                instruction.as_deref(),
+            ),
+        },
     }
 }
