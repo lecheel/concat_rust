@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Concat Rust Paster",
-  "version": "1.3",
+  "version": "1.4",
   "description": "Retrieve code bodies from local concat_rust daemon and paste into page",
   "permissions": [
     "activeTab",
@@ -10,7 +10,8 @@
     "clipboardRead",
     "contextMenus",
     "storage",
-    "sidePanel"
+    "sidePanel",
+    "notifications" 
   ],
   "host_permissions": [
     "http://127.0.0.1/*",

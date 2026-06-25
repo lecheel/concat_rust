@@ -323,6 +323,48 @@ async function loadRepos() {
   }
 });
 
+
+// ── Copy info listener ──
+function displayCopyInfo(data) {
+  const section = document.getElementById('copyInfoSection');
+  const content = document.getElementById('copyInfoContent');
+  if (!section || !content) return;
+
+  const preview = data.text || 'Copy detected';
+  const timestamp = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '';
+
+  section.style.display = 'flex';
+  content.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span>${escapeHtml(preview)}</span>
+      <span style="font-size:10px; color:#888;">${timestamp}</span>
+    </div>
+  `;
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.lastCopy) {
+    const data = changes.lastCopy.newValue;
+    if (data && Date.now() - data.timestamp < 5 * 60 * 1000) {
+      displayCopyInfo(data);
+    }
+  }
+});
+
+// On sidepanel load, check if there's a recent copy stored
+document.addEventListener('DOMContentLoaded', () => {
+  chrome.storage.local.get(['lastCopy'], (result) => {
+    if (result.lastCopy) {
+      const data = result.lastCopy;
+      // Show if less than 5 minutes old
+      if (Date.now() - data.timestamp < 5 * 60 * 1000) {
+        displayCopyInfo(data);
+      }
+    }
+  });
+});
+
+
 const ROOT_LEVEL_FILES = [
   "Cargo.toml", "Cargo.lock", "docker-compose.yml", "docker-compose.yaml",
   "Dockerfile", ".env", ".env.example", "Makefile", "README.md", "build.rs"
@@ -467,7 +509,7 @@ async function doFetch() {
     if (btn) btn.disabled = false;
   }
 }
- 
+
 function parseCommandLine(line) {
   const tokens = line.trim().split(/\s+/);
   if (tokens.length === 0 || (tokens.length === 1 && tokens[0] === "")) return null;
@@ -488,6 +530,7 @@ function parseCommandLine(line) {
   const hashes = [];
   const files = [];
   let parsingFiles = false;
+  let parsingHashes = false;   // NEW: flag for hash‑parsing mode
   let skeleton = false;
   let repo = '';
 
@@ -495,28 +538,50 @@ function parseCommandLine(line) {
     const token = tokens[i];
     if (!token) continue;
 
-    if (token === '--file' || token === '-f' || token.toLowerCase() === 'file') {
+    const lower = token.toLowerCase();
+
+    // ---- Special flags ----
+    if (lower === '--file' || lower === '-f' || lower === 'file') {
       parsingFiles = true;
-    } else if (token === '--skeleton' || token === '-s' || token.toLowerCase() === 'skeleton') {
+      parsingHashes = false;   // file mode overrides hash mode
+    } else if (lower === 'hash') {
+      // NEW: literal "hash" keyword – enter hash‑parsing mode
+      parsingHashes = true;
+      parsingFiles = false;
+    } else if (lower === '--skeleton' || lower === '-s' || lower === 'skeleton') {
       skeleton = true;
-    } else if (token === '--repo' || token === '-r' || token.toLowerCase() === 'use' || token.toLowerCase() === 'repo') {
+      // Keep current parsing modes (doesn't change them)
+    } else if (lower === '--repo' || lower === '-r' || lower === 'use' || lower === 'repo') {
       if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) {
         repo = tokens[++i].replace(/['"]/g, '');
       }
     } else if (token.startsWith('-')) {
+      // Any other flag resets both parsing modes
       parsingFiles = false;
+      parsingHashes = false;
       if (i + 1 < tokens.length && !tokens[i + 1].startsWith('-')) {
-        i++;
+        i++;   // skip next token if it's an argument (e.g. --flag value)
       }
     } else {
+      // ---- Token processing ----
+      // Split by commas (support comma‑separated lists)
       const parts = token.split(',').map(p => p.replace(/['"]/g, '').trim()).filter(Boolean);
       for (let cleanToken of parts) {
-        if (cleanToken) {
-          if (/^hash[:=]/i.test(cleanToken)) {
-            cleanToken = cleanToken.replace(/^hash[:=]/i, '');
-          }
+        if (!cleanToken) continue;
 
-          if (parsingFiles || cleanToken.includes('.') || cleanToken.includes('/')) {
+        // Handle explicit "hash:" prefix (strip it)
+        if (/^hash[:=]/i.test(cleanToken)) {
+          cleanToken = cleanToken.replace(/^hash[:=]/i, '');
+        }
+
+        // Determine type based on current parsing mode or content
+        if (parsingHashes) {
+          hashes.push(cleanToken);
+        } else if (parsingFiles) {
+          files.push(cleanToken);
+        } else {
+          // Auto‑detect: if it contains '.' or '/' it's a file, otherwise a hash
+          if (cleanToken.includes('.') || cleanToken.includes('/')) {
             files.push(cleanToken);
           } else {
             hashes.push(cleanToken);
@@ -528,7 +593,7 @@ function parseCommandLine(line) {
 
   return { hashes, files, skeleton, repo };
 }
-
+ 
 function escapeHtml(str) {
   return String(str)
     .replace(/&/g, '&amp;')

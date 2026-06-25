@@ -58,6 +58,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .catch(err => sendResponse({ success: false, error: err.message }));
     return true;
   }
+  
+    // Inside the existing onMessage listener
+    if (message.action === 'copyDetected' || message.action === 'copyButtonClicked') {
+      const copyData = {
+        text: message.text || 'Copy action detected',
+        fullText: message.fullText || '',
+        timestamp: Date.now()
+      };
+    
+      // Store in local storage for sidepanel to pick up later
+      chrome.storage.local.set({ lastCopy: copyData });
+    
+      // Notify the sidepanel if it's open
+      chrome.runtime.sendMessage({
+        target: 'sidepanel',
+        action: 'showCopyInfo',
+        data: copyData
+      }).catch(() => {}); // ignore if no sidepanel listener
+    
+      // Optional: show a system notification
+      chrome.notifications.create({
+        type: 'basic',
+        iconUrl: 'icon.png', // make sure you have an icon file
+        title: '📋 Copy detected',
+        message: copyData.text.length > 60 ? copyData.text.substring(0, 60) + '…' : copyData.text
+      });
+    
+      sendResponse({ done: true });
+      return true;
+    }
+    
 });
 
 async function fetchAndPaste(host, port, paramsStr, options = {}) {

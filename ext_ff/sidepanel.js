@@ -1,13 +1,28 @@
-document.addEventListener('DOMContentLoaded', () => {
-  function updateHeaderTitle() {
-    const activeRepoInput = document.getElementById('activeRepo');
-    const headerTitle = document.getElementById('headerTitle');
-    if (!headerTitle) return;
+// Global placeholder for retrieved data to bind to the drag payload
+let currentFetchedText = '';
+let activeRepo = ''; // Global active repository state
+let lastTotalLoc = null; // Tracks the total LOC from the last fetch
 
-    const repo = activeRepoInput ? activeRepoInput.value.trim() : '';
-    headerTitle.textContent = repo
-      ? `Concat Rust Paster (${repo})`
-      : 'Concat Rust Paster';
+function updateHeaderTitle() {
+  const headerTitle = document.getElementById('headerTitle');
+  if (!headerTitle) return;
+
+  const locSuffix = lastTotalLoc != null ? ` [${lastTotalLoc} LOC]` : '';
+  headerTitle.textContent = activeRepo
+    ? `Concat Rust Paster (${activeRepo})${locSuffix}`
+    : `Concat Rust Paster${locSuffix}`;
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+
+  const pasteFileRow = document.getElementById('pasteFileRow');
+  const pasteFileBox = document.getElementById('pasteFileBox');
+
+  if (pasteFileRow && pasteFileBox) {
+    pasteFileRow.addEventListener('click', () => {
+      const isChecked = pasteFileBox.classList.toggle('checked');
+      pasteFileBox.textContent = isChecked ? '✓' : '';
+    });
   }
 
   let skeletonChecked = false;
@@ -58,122 +73,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const hostInput = document.getElementById('host');
   const portInput = document.getElementById('port');
-  const activeRepoInput = document.getElementById('activeRepo');
 
   chrome.storage.local.get(['host', 'port', 'activeRepo'], (result) => {
     if (result.host && hostInput) hostInput.value = result.host;
     if (result.port && portInput) portInput.value = result.port;
-    if (result.activeRepo && activeRepoInput) activeRepoInput.value = result.activeRepo;
-    updateHeaderTitle();
+    if (result.activeRepo) {
+      setActiveRepo(result.activeRepo);
+    } else {
+      setActiveRepo('');
+    }
     loadRepos();
   });
 
-  ['host', 'port', 'activeRepo'].forEach(id => {
+  ['host', 'port'].forEach(id => {
     const inputEl = document.getElementById(id);
     if (inputEl) {
       inputEl.addEventListener('change', () => {
         chrome.storage.local.set({
           host: hostInput ? hostInput.value : '127.0.0.1',
-          port: portInput ? portInput.value : '7890',
-          activeRepo: activeRepoInput ? activeRepoInput.value.trim() : ''
+          port: portInput ? portInput.value : '7890'
         });
       });
     }
   });
 
-  if (activeRepoInput) {
-    activeRepoInput.addEventListener('input', () => {
-      updateHeaderTitle();
-      highlightActiveChip();
-    });
-  }
-
   const refreshBtn = document.getElementById('refreshRepos');
   if (refreshBtn) {
     refreshBtn.addEventListener('click', loadRepos);
-  }
-
-  async function loadRepos() {
-    const btn = document.getElementById('refreshRepos');
-    const chipsContainer = document.getElementById('repoChips');
-    if (!btn || !chipsContainer) return;
-
-    const host = (hostInput ? hostInput.value.trim() : '') || '127.0.0.1';
-    const port = (portInput ? portInput.value.trim() : '') || '7890';
-
-    btn.classList.add('spinning');
-    btn.textContent = '…';
-
-    try {
-      const response = await chrome.runtime.sendMessage({
-        action: 'fetchRepos',
-        host,
-        port
-      });
-
-      if (response && response.success && Array.isArray(response.data)) {
-        renderRepoChips(response.data);
-      } else {
-        const errMsg = response ? response.error : 'Unknown error';
-        chipsContainer.innerHTML = `<span class="repo-chips-empty">⚠ ${escapeHtml(errMsg)}</span>`;
-      }
-    } catch (err) {
-      chipsContainer.innerHTML = `<span class="repo-chips-empty">⚠ ${escapeHtml(err.message)}</span>`;
-    } finally {
-      btn.classList.remove('spinning');
-      btn.textContent = '↻';
-    }
-  }
-
-  function renderRepoChips(repos) {
-    const chipsContainer = document.getElementById('repoChips');
-    const activeRepoInput = document.getElementById('activeRepo');
-    if (!chipsContainer || !activeRepoInput) return;
-
-    const currentRepo = activeRepoInput.value.trim();
-
-    if (repos.length === 0) {
-      chipsContainer.innerHTML = '<span class="repo-chips-empty">No repos registered. Use: cli add-repo &lt;id&gt; &lt;path&gt;</span>';
-      return;
-    }
-
-    chipsContainer.innerHTML = '';
-    for (const repo of repos) {
-      const id = repo.id || '?';
-      const branch = repo.git_branch || 'detached';
-      const files = repo.file_count != null ? repo.file_count : '?';
-
-      const chip = document.createElement('div');
-      chip.className = 'repo-chip' + (id === currentRepo ? ' active' : '');
-      chip.dataset.repoId = id;
-      chip.title = `${id} [${branch}] (${files} files)`;
-      chip.innerHTML = `${escapeHtml(id)} <span class="chip-branch">${escapeHtml(branch)}</span>`;
-
-      chip.addEventListener('click', () => {
-        if (activeRepoInput.value.trim() === id) {
-          activeRepoInput.value = '';
-        } else {
-          activeRepoInput.value = id;
-        }
-        chrome.storage.local.set({ activeRepo: activeRepoInput.value.trim() });
-        updateHeaderTitle();
-        highlightActiveChip();
-      });
-
-      chipsContainer.appendChild(chip);
-    }
-  }
-
-  function highlightActiveChip() {
-    const chipsContainer = document.getElementById('repoChips');
-    const activeRepoInput = document.getElementById('activeRepo');
-    if (!chipsContainer || !activeRepoInput) return;
-
-    const currentRepo = activeRepoInput.value.trim();
-    const chips = chipsContainer.querySelectorAll('.repo-chip');
-    chips.forEach(chip => {
-      chip.classList.toggle('active', chip.dataset.repoId === currentRepo);
-    });
   }
 
   const fetchBtn = document.getElementById('fetchBtn');
@@ -223,16 +149,156 @@ document.addEventListener('DOMContentLoaded', () => {
           if (skeletonChecked && skeletonRow) skeletonRow.click();
         }
 
-        if (parsed.repo && activeRepoInput) {
-          activeRepoInput.value = parsed.repo;
-          chrome.storage.local.set({ activeRepo: parsed.repo });
-          updateHeaderTitle();
-          highlightActiveChip();
+        if (parsed.repo) {
+          setActiveRepo(parsed.repo);
         }
       }
     });
   }
+
+  // ── setActiveRepo ──
+  function setActiveRepo(repo) {
+    activeRepo = repo;
+    chrome.storage.local.set({ activeRepo: repo });
+    updateHeaderTitle();
+    highlightActiveChip();
+  }
+
+  // ── loadRepos ──
+  async function loadRepos() {
+    const btn = document.getElementById('refreshRepos');
+    const chipsContainer = document.getElementById('repoChips');
+    if (!btn || !chipsContainer) return;
+
+    const host = (hostInput ? hostInput.value.trim() : '') || '127.0.0.1';
+    const port = (portInput ? portInput.value.trim() : '') || '7890';
+
+    btn.classList.add('spinning');
+    btn.textContent = '…';
+
+    let detectedActiveRepo = '';
+
+    try {
+      // 1. Fetch the absolute active repo directly from the /active endpoint
+      const activeResponse = await chrome.runtime.sendMessage({
+        action: 'fetchActiveRepo',
+        host,
+        port
+      });
+
+      if (activeResponse && activeResponse.success && activeResponse.repo) {
+        detectedActiveRepo = activeResponse.repo;
+      }
+
+      // Set the state immediately based on /active output
+      setActiveRepo(detectedActiveRepo);
+
+      // 2. Fetch the repos list strictly to render the clickable chips
+      const response = await chrome.runtime.sendMessage({
+        action: 'fetchRepos',
+        host,
+        port
+      });
+
+      if (response && response.success && Array.isArray(response.data)) {
+        renderRepoChips(response.data);
+      } else {
+        const errMsg = response ? response.error : 'Unknown error';
+        chipsContainer.innerHTML = `<span class="repo-chips-empty">⚠ ${escapeHtml(errMsg)}</span>`;
+      }
+    } catch (err) {
+      chipsContainer.innerHTML = `<span class="repo-chips-empty">⚠ ${escapeHtml(err.message)}</span>`;
+    } finally {
+      btn.classList.remove('spinning');
+      btn.textContent = '↻';
+    }
+  }
+
+  // ── renderRepoChips ──
+  function renderRepoChips(repos) {
+    const chipsContainer = document.getElementById('repoChips');
+    if (!chipsContainer) return;
+
+    if (repos.length === 0) {
+      chipsContainer.innerHTML = '<span class="repo-chips-empty">No repos registered. Use: cli add-repo &lt;id&gt; &lt;path&gt;</span>';
+      return;
+    }
+
+    chipsContainer.innerHTML = '';
+    for (const repo of repos) {
+      const id = repo.id || '?';
+      const branch = repo.git_branch || 'detached';
+      const files = repo.file_count != null ? repo.file_count : '?';
+
+      const chip = document.createElement('div');
+      chip.className = 'repo-chip' + (id === activeRepo ? ' active' : '');
+      chip.dataset.repoId = id;
+      chip.title = `${id} [${branch}] (${files} files)`;
+      chip.innerHTML = `${escapeHtml(id)} <span class="chip-branch">${escapeHtml(branch)}</span>`;
+
+      chip.addEventListener('click', () => {
+        const nextRepo = (activeRepo === id) ? '' : id;
+        setActiveRepo(nextRepo);
+      });
+
+      chipsContainer.appendChild(chip);
+    }
+  }
+
+  // ── highlightActiveChip ──
+  function highlightActiveChip() {
+    const chipsContainer = document.getElementById('repoChips');
+    if (!chipsContainer) return;
+
+    const chips = chipsContainer.querySelectorAll('.repo-chip');
+    chips.forEach(chip => {
+      chip.classList.toggle('active', chip.dataset.repoId === activeRepo);
+    });
+  }
 });
+
+
+// ── Copy info listener ──
+function displayCopyInfo(data) {
+  const section = document.getElementById('copyInfoSection');
+  const content = document.getElementById('copyInfoContent');
+  if (!section || !content) return;
+
+  const preview = data.text || 'Copy detected';
+  const timestamp = data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : '';
+
+  section.style.display = 'flex';
+  section.hidden = false;
+  content.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <span>${escapeHtml(preview)}</span>
+      <span style="font-size:10px; color:#888;">${timestamp}</span>
+    </div>
+  `;
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes.lastCopy) {
+    const data = changes.lastCopy.newValue;
+    if (data && Date.now() - data.timestamp < 5 * 60 * 1000) {
+      displayCopyInfo(data);
+    }
+  }
+});
+
+// On sidepanel load, check if there's a recent copy stored
+document.addEventListener('DOMContentLoaded', () => {
+  chrome.storage.local.get(['lastCopy'], (result) => {
+    if (result.lastCopy) {
+      const data = result.lastCopy;
+      // Show if less than 5 minutes old
+      if (Date.now() - data.timestamp < 5 * 60 * 1000) {
+        displayCopyInfo(data);
+      }
+    }
+  });
+});
+
 
 const ROOT_LEVEL_FILES = [
   "Cargo.toml", "Cargo.lock", "docker-compose.yml", "docker-compose.yaml",
@@ -278,45 +344,58 @@ function setStatus(type, html) {
   content.innerHTML = html;
 }
 
-function clearStatus() {
-  const box = document.getElementById('statusBox');
-  if (box) box.className = 'status-box';
-}
-
 async function doFetch() {
   const hashesInput = document.getElementById('hashes');
   const filesInput  = document.getElementById('files');
   const hostInput   = document.getElementById('host');
   const portInput   = document.getElementById('port');
-  const activeRepoInput = document.getElementById('activeRepo');
 
   const hashesText = hashesInput ? hashesInput.value : '';
   const filesText  = filesInput ? filesInput.value : '';
   let host = (hostInput ? hostInput.value.trim() : '') || '127.0.0.1';
   let port = (portInput ? portInput.value.trim() : '') || '7890';
-  const activeRepo = activeRepoInput ? activeRepoInput.value.trim() : '';
 
   const params = new URLSearchParams();
+  let isSkeleton = document.getElementById('skeletonBox')?.classList.contains('checked') || false;
+  const pasteFileChecked = document.getElementById('pasteFileBox')?.classList.contains('checked') || false;
 
-  const skeletonChecked = document.getElementById('skeletonBox')?.classList.contains('checked') || false;
+  const hashes = hashesText.split(/[\r\n\s,]+/)
+    .map(h => h.trim().replace(/^hash[:=]/i, ''))
+    .filter(Boolean);
 
-  if (skeletonChecked) {
+  const rawFiles = filesText.split(/[\s,]+/).map(f => f.trim()).filter(Boolean);
+  const resolvedFiles = rawFiles.map(f => resolvePath(f, activeRepo));
+
+  if (hashes.length === 0 && resolvedFiles.length === 0 && activeRepo) {
+    isSkeleton = true;
+  }
+
+  if (hashes.length === 0 && resolvedFiles.length === 0 && !isSkeleton) {
+    setStatus('error', 'Add at least one hash, file path, or select an active repo.');
+    return;
+  }
+
+  if (activeRepo) {
+    params.set('repo', activeRepo);
+  }
+
+  let filename = 'skeleton.txt';
+  if (isSkeleton) {
     params.set('skeleton', 'true');
-    if (activeRepo) {
-      params.set('repo', activeRepo);
-    }
+    filename = activeRepo ? `${activeRepo}_skeleton.txt` : 'skeleton.txt';
   } else {
-    const hashes = hashesText.split(/[\r\n\s,]+/).map(h => h.trim()).filter(Boolean);
-    const rawFiles = filesText.split(/[\s,]+/).map(f => f.trim()).filter(Boolean);
-
-    const resolvedFiles = rawFiles.map(f => resolvePath(f, activeRepo));
-
-    if (hashes.length === 0 && resolvedFiles.length === 0) {
-      setStatus('error', 'Add at least one hash, file path, or enable skeleton.');
-      return;
-    }
     hashes.forEach(h => params.append('hash', h));
     resolvedFiles.forEach(f => params.append('file', f));
+
+    if (rawFiles.length > 0) {
+      filename = rawFiles[0].split('/').pop() || 'file.rs';
+    } else if (hashes.length > 0) {
+      filename = `block_${hashes[0].substring(0, 8)}.rs`;
+    }
+  }
+
+  if (!filename.includes('.')) {
+    filename += '.rs';
   }
 
   const btn = document.getElementById('fetchBtn');
@@ -328,16 +407,32 @@ async function doFetch() {
       action: 'fetchAndPaste',
       host,
       port,
-      params: params.toString()
+      params: params.toString(),
+      pasteAsFile: pasteFileChecked,
+      filename: filename
     });
 
     if (response && response.success) {
+      currentFetchedText = response.text || '';
       const items = response.summaries.map(s =>
         `<div class="status-item">✓ <span>${escapeHtml(s)}</span></div>`
       ).join('');
+
+      let locHtml = '';
+      if (response.locInfo) {
+        const li = response.locInfo;
+        lastTotalLoc = li.total_loc;
+        updateHeaderTitle();
+
+        locHtml = `<div class="status-item">📊 LOC: ${li.skeleton_loc} (skel) + ${li.file_loc} (file) + ${li.hash_loc} (hash) = <strong>${li.total_loc}</strong></div>`;
+      } else {
+        lastTotalLoc = null;
+        updateHeaderTitle();
+      }
+
       setStatus('success',
         `<div class="status-title">Copied to clipboard</div>` +
-        `<div class="status-items">${items}</div>`
+        `<div class="status-items">${items}${locHtml}</div>`
       );
     } else {
       const errMsg = response ? response.error : 'Unknown response error';
@@ -392,8 +487,12 @@ function parseCommandLine(line) {
       }
     } else {
       const parts = token.split(',').map(p => p.replace(/['"]/g, '').trim()).filter(Boolean);
-      for (const cleanToken of parts) {
+      for (let cleanToken of parts) {
         if (cleanToken) {
+          if (/^hash[:=]/i.test(cleanToken)) {
+            cleanToken = cleanToken.replace(/^hash[:=]/i, '');
+          }
+
           if (parsingFiles || cleanToken.includes('.') || cleanToken.includes('/')) {
             files.push(cleanToken);
           } else {
