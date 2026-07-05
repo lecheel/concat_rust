@@ -152,6 +152,9 @@ impl DaemonCache {
         };
         let skeleton = self.assemble_skeleton_for_repos(repo_filter, repo_ids);
         let meta_prompt = self.effective_meta_prompt();
-        format!("{}{}{}", header, skeleton, meta_prompt)
+        format!(
+            "{}{}\nPlease apply changes using this aider style format all changed in single code block\n```\n// src/filename1.rs\n<<<<<<< SEARCH\n[exact original lines (include enough context to be unique, avoid too thin blocks)]\n=======\n[modified lines]\n>>>>>>> REPLACE\n // src/filename2.rs\n<<<<<<< SEARCH\n[exact original lines (include enough context to be unique, avoid too thin blocks)]\n=======\n[modified lines]\n>>>>>>> REPLACE\n```\n{}",
+            header, skeleton, meta_prompt
+        )
     }
 }
