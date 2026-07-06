@@ -309,7 +309,7 @@ pub async fn get_body_info(Path(prefix): Path<String>, State(state): State<AppSt
 pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppState>) -> Response {
     let db = state.cache.lock().await;
     let repo_ids = collect_repo_ids(&state).await;
-
+    let path = path.strip_prefix('/').unwrap_or(&path).to_string();
     let mut file_entry = db.files.get(&path);
     let mut actual_path = path.clone();
 
@@ -417,6 +417,7 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
 }
 
 pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -> Response {
+    let path = path.strip_prefix('/').unwrap_or(&path).to_string();
     let repo_ids = collect_repo_ids(&state).await;
     let display_path = strip_repo_prefix(&path, &repo_ids);
     if path.ends_with(".rs") {

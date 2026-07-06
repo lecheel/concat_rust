@@ -162,10 +162,11 @@ fn has_repo_prefix(path: &str) -> bool {
 }
 
 fn resolve_path(input: &str, active_repo: Option<&str>) -> String {
-    let with_src = if should_auto_prefix_src(input) {
-        format!("src/{}", input)
+    let clean_input = input.strip_prefix('/').unwrap_or(input);
+    let with_src = if should_auto_prefix_src(clean_input) {
+        format!("src/{}", clean_input)
     } else {
-        input.to_string()
+        clean_input.to_string()
     };
     if let Some(repo) = active_repo {
         let repo_prefix = format!("{}/", repo);
