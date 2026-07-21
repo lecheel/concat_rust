@@ -1,5 +1,5 @@
 use super::state::{AppState, RequestLog};
-use crate::cache::strip_repo_prefix;
+use crate::cache::{strip_hash_prefix, strip_repo_prefix};
 use axum::http::Method;
 use axum::{
     extract::{Path, Query, Request, State},
@@ -229,13 +229,13 @@ pub async fn get_catalog(State(state): State<AppState>) -> Response {
 pub async fn get_body_info(Path(prefix): Path<String>, State(state): State<AppState>) -> Response {
     let db = state.cache.lock().await;
     let repo_ids = collect_repo_ids(&state).await;
-    let hashes: Vec<&str> = prefix
+    let hashes: Vec<String> = prefix
         .split(|c| c == '+' || c == ',')
-        .map(|s| s.trim())
+        .map(|s| strip_hash_prefix(s))
         .filter(|s| !s.is_empty())
         .collect();
     let mut infos = Vec::new();
-    for h in hashes {
+    for h in &hashes {
         if let Some(entry) = db.bodies.get(h) {
             infos.push(BodyInfoResponse {
                 hash: h.to_string(),
@@ -523,9 +523,9 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
 pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>) -> Response {
     let mut db = state.cache.lock().await;
     let repo_ids = collect_repo_ids(&state).await;
-    let hashes: Vec<&str> = prefix
+    let hashes: Vec<String> = prefix
         .split(|c: char| c == '+' || c == ',')
-        .map(|s| s.trim())
+        .map(|s| strip_hash_prefix(s))
         .filter(|s| !s.is_empty())
         .collect();
     if hashes.is_empty() {
@@ -536,7 +536,7 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
         );
     }
     if hashes.len() == 1 {
-        let h = hashes[0];
+        let h = &hashes[0];
         let mut resolved_hash = None;
         if db.bodies.contains_key(h) {
             resolved_hash = Some(h.to_string());
@@ -633,7 +633,7 @@ pub async fn get_body(Path(prefix): Path<String>, State(state): State<AppState>)
     let mut total_loc = 0usize;
     let mut not_found = Vec::new();
     let mut matched_hashes = Vec::new();
-    for h in hashes {
+    for h in &hashes {
         if db.bodies.contains_key(h) {
             matched_hashes.push(h.to_string());
             continue;

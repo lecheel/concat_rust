@@ -55,7 +55,7 @@ fn interruptible_sleep(duration: std::time::Duration) -> bool {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "concat_rust_cli", about = "CLI for the concat_rust daemon")]
+#[command(name = "concat_rust_cli", about = "CLI for the concat_rust daemon", allow_external_subcommands = true)]
 struct Cli {
     // Made optional so running `cli` with no args defaults to `cli use`
     #[command(subcommand)]
@@ -71,6 +71,10 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
+    /// Fetch a mix of files and/or hashes in one shot:
+    /// `cli src/main.rs src/mod.rs 7a1864469b42 f3cb24d`
+    #[command(external_subcommand)]
+    Mix(Vec<String>),
     Use {
         repo_id: Option<String>,
     },
@@ -118,6 +122,11 @@ enum Commands {
         output: Option<String>,
         /// Optional problem description or instruction to append to the prompt
         instruction: Option<String>,
+    },
+    /// Fetch a mix of files and hashes in one go
+    Fetch {
+        /// Arguments that can be file paths or hashes (auto-detected)
+        args: Vec<String>,
     },
 }
 
@@ -856,6 +865,77 @@ fn cmd_skeleton(repo: Option<&str>, base: &str, warn_loc: usize, output: Option<
     }
 }
 
+/// Heuristic: a token is treated as a hash prefix when it is at least 7 chars
+/// long and consists solely of ASCII hex digits. This avoids misclassifying
+/// ordinary paths like `src/main.rs`, `Cargo.toml`, or `lib.rs`.
+fn is_hash(s: &str) -> bool {
+    let s = s.trim();
+    if s.len() < 7 {
+        return false;
+    }
+    s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Fetch a mix of file paths and hash prefixes in a single invocation.
+/// Each token is classified by [`is_hash`]; hashes go to `/{hash}` and files
+/// go to `/file/{path}` (after repo/`src/` resolution). Results are
+/// concatenated in the order given and copied to the clipboard as one batch.
+fn cmd_mix(items: &[String], base: &str, warn_loc: usize) {
+    let active = get_active_repo();
+    let mut full_content = String::new();
+    let mut summaries = Vec::new();
+
+    for item in items {
+        for part in item.split(',') {
+            check_interrupted();
+            let part = part.trim();
+            // Skip empty tokens and any flag-like args that external_subcommand
+            // may have swept up when the user interleaves `--host`/`--port` etc.
+            if part.is_empty() || part.starts_with('-') {
+                continue;
+            }
+
+            if is_hash(part) {
+                let cleaned = strip_hash_prefix(part);
+                let url = format!("{}/{}", base, cleaned);
+                match fetch_text(&url) {
+                    Ok(body) => {
+                        let loc = body.lines().count();
+                        if !full_content.is_empty() {
+                            full_content.push_str("\n\n");
+                        }
+                        full_content.push_str(&body);
+                        summaries.push(format!("Hash: {} [{} LOC]", cleaned, loc));
+                    }
+                    Err(e) => eprintln!("❌ hash {}: {}", cleaned, e),
+                }
+            } else {
+                let resolved = resolve_path(part, active.as_deref());
+                let dp = display_path(&resolved, active.as_deref());
+                if dp != part {
+                    eprintln!("  → resolved: {}", dp);
+                }
+                let url = format!("{}/file/{}", base, resolved);
+                match fetch_text(&url) {
+                    Ok(body) => {
+                        let loc = body.lines().count();
+                        if !full_content.is_empty() {
+                            full_content.push_str("\n\n");
+                        }
+                        full_content.push_str(&body);
+                        summaries.push(format!("File: {} [{} LOC]", dp, loc));
+                    }
+                    Err(e) => eprintln!("❌ {}: {}", dp, e),
+                }
+            }
+        }
+    }
+
+    if !full_content.is_empty() {
+        copy_to_clipboard(&full_content, warn_loc, &summaries);
+    }
+}
+
 fn cmd_file(paths: &[String], base: &str, warn_loc: usize) {
     let active = get_active_repo();
     let mut full_content = String::new();
@@ -921,7 +1001,8 @@ fn cmd_info(target: &str, is_file: bool, base: &str) {
             Err(e) => eprintln!("❌ {}", e),
         }
     } else {
-        let url = format!("{}/info/{}", base, target);
+        let cleaned = strip_hash_prefix(target);
+        let url = format!("{}/info/{}", base, cleaned);
         match fetch_json(&url) {
             Ok(info) => {
                 if let Some(arr) = info.as_array() {
@@ -948,8 +1029,110 @@ fn cmd_info(target: &str, is_file: bool, base: &str) {
     }
 }
 
+fn strip_hash_prefix(hash: &str) -> String {
+    let trimmed = hash.trim();
+    let lower = trimmed.to_lowercase();
+    if lower.starts_with("hash:") || lower.starts_with("hash_") || lower.starts_with("hash-") {
+        trimmed[5..].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Detect if an argument is a content hash (vs a file path).
+/// Hashes are hex strings (6-64 chars) without path separators or file extensions.
+fn is_content_hash(arg: &str) -> bool {
+    let stripped = strip_hash_prefix(arg);
+    let lower = stripped.to_lowercase();
+
+    // If it looks like a path, it's not a hash
+    if arg.contains('/') || arg.contains('\\') || arg.starts_with('.') {
+        return false;
+    }
+
+    // If it has a file extension, it's not a hash
+    if arg.contains('.') {
+        return false;
+    }
+
+    // Must be 6-64 hex characters
+    lower.len() >= 6 && lower.len() <= 64 && lower.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+fn cmd_fetch(args: &[String], base: &str, active: Option<&str>, warn_loc: usize) {
+    let mut file_args: Vec<String> = Vec::new();
+    let mut hash_args: Vec<String> = Vec::new();
+
+    for arg in args {
+        let stripped = strip_hash_prefix(arg);
+        if is_content_hash(&stripped) {
+            hash_args.push(stripped);
+        } else {
+            file_args.push(arg.clone());
+        }
+    }
+
+    if file_args.is_empty() && hash_args.is_empty() {
+        eprintln!("❌ No arguments provided");
+        return;
+    }
+
+    let mut full_content = String::new();
+    let mut summaries = Vec::new();
+
+    // Fetch files
+    for p in &file_args {
+        for part in p.split(',') {
+            check_interrupted();
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            let resolved = resolve_path(part, active);
+            let dp = display_path(&resolved, active);
+            if dp != part {
+                eprintln!("  → resolved: {}", dp);
+            }
+            let url = format!("{}/file/{}", base, resolved);
+            match fetch_text(&url) {
+                Ok(body) => {
+                    let loc = body.lines().count();
+                    if !full_content.is_empty() {
+                        full_content.push_str("\n\n");
+                    }
+                    full_content.push_str(&body);
+                    summaries.push(format!("File: {} [{} LOC]", dp, loc));
+                }
+                Err(e) => eprintln!("❌ {}: {}", dp, e),
+            }
+        }
+    }
+
+    // Fetch hashes
+    if !hash_args.is_empty() {
+        let hash_query = hash_args.join("+");
+        let url = format!("{}/{}", base, hash_query);
+        match fetch_text(&url) {
+            Ok(body) => {
+                let loc = body.lines().count();
+                if !full_content.is_empty() {
+                    full_content.push_str("\n\n");
+                }
+                full_content.push_str(&body);
+                summaries.push(format!("Hashes: [{}] [{} LOC]", hash_args.join(", "), loc));
+            }
+            Err(e) => eprintln!("❌ Hash fetch failed: {}", e),
+        }
+    }
+
+    if !full_content.is_empty() {
+        copy_to_clipboard(&full_content, warn_loc, &summaries);
+    }
+}
+
 fn cmd_hash(hashes: &[String], base: &str, warn_loc: usize) {
-    let hash_query = hashes.join("+");
+    let cleaned: Vec<String> = hashes.iter().map(|h| strip_hash_prefix(h)).collect();
+    let hash_query = cleaned.join("+");
     let url = format!("{}/{}", base, hash_query);
     match fetch_text(&url) {
         Ok(body) => {
@@ -967,7 +1150,7 @@ fn cmd_hash(hashes: &[String], base: &str, warn_loc: usize) {
             };
             let summary = format!(
                 "Hashes: [{}] (Files: {}) [{} LOC]",
-                hashes.join(", "),
+                cleaned.join(", "),
                 files_str,
                 loc
             );
@@ -991,6 +1174,7 @@ fn main() {
         // If no command is provided, default to interactive `cli use`
         None => cmd_use(None, &base),
         Some(cmd) => match cmd {
+            Commands::Mix(items) => cmd_mix(&items, &base, cli.warn_loc),
             Commands::Use { repo_id } => cmd_use(repo_id.as_deref(), &base),
             Commands::Active => cmd_active(&base),
             Commands::Repos => cmd_repos(&base),
@@ -1013,6 +1197,10 @@ fn main() {
                 output.as_deref(),
                 instruction.as_deref(),
             ),
+            Commands::Fetch { args } => {
+                let active = get_active_repo();
+                cmd_fetch(&args, &base, active.as_deref(), cli.warn_loc);
+            }
         },
     }
 }

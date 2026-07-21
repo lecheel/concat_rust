@@ -31,6 +31,18 @@ pub fn strip_repo_prefix(path: &str, repo_ids: &[String]) -> String {
     path.to_string()
 }
 
+/// Strips common hash prefixes from a hash string.
+/// Handles patterns like "HASH:xxx", "hash:xxx", "hash_xxx", "hash-xxx".
+pub fn strip_hash_prefix(hash: &str) -> String {
+    let trimmed = hash.trim();
+    let lower = trimmed.to_lowercase();
+    if lower.starts_with("hash:") || lower.starts_with("hash_") || lower.starts_with("hash-") {
+        trimmed[5..].to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct BodyMeta {
     pub filepath: String,
