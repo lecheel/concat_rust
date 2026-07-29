@@ -243,7 +243,7 @@ pub async fn post_repo_add(
     for file in scan_result.files {
         let rel_str = file.rel_path.clone();
         found_rel_paths.insert(rel_str.clone());
-        if rel_str.ends_with(".rs") {
+        if rel_str.ends_with(".rs") || rel_str.ends_with(".go") {
             let body_hashes: Vec<String> = file.bodies.iter().map(|(h, _, _)| h.clone()).collect();
             for (hash, meta, body) in file.bodies {
                 db.bodies
@@ -332,7 +332,7 @@ pub async fn post_sync(State(state): State<AppState>) -> Response {
     for file in scan_result.files {
         let rel_str = file.rel_path.clone();
         found_rel_paths.insert(rel_str.clone());
-        if rel_str.ends_with(".rs") {
+        if rel_str.ends_with(".rs") || rel_str.ends_with(".go") {
             let body_hashes: Vec<String> = file.bodies.iter().map(|(h, _, _)| h.clone()).collect();
             for (hash, meta, body) in file.bodies {
                 db.bodies
@@ -414,7 +414,7 @@ pub async fn post_sync_repo(Path(id): Path<String>, State(state): State<AppState
     for file in scan_result.files {
         let rel_str = file.rel_path.clone();
         found_rel_paths.insert(rel_str.clone());
-        if rel_str.ends_with(".rs") {
+        if rel_str.ends_with(".rs") || rel_str.ends_with(".go") {
             let body_hashes: Vec<String> = file.bodies.iter().map(|(h, _, _)| h.clone()).collect();
             for (hash, meta, body) in file.bodies {
                 db.bodies

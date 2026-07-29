@@ -530,10 +530,10 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
                 item.className = 'w-full text-left bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white px-3 py-2 rounded text-xs transition font-mono border border-slate-800/40 flex items-center justify-between group';
                 item.onclick = () => viewFile(file.filepath);
                 
-                const isRust = file.filepath.endsWith('.rs');
+                const fileIcon = file.filepath.endsWith('.rs') ? '🦀' : file.filepath.endsWith('.go') ? '🐹' : '📄';
                 item.innerHTML = `
                     <div class="truncate pr-2 flex items-center space-x-1.5">
-                        <span class="text-[10px]">${isRust ? '🦀' : '📄'}</span>
+                        <span class="text-[10px]">${fileIcon}</span>
                         <span class="truncate" title="${file.filepath}">${file.filepath}</span>
                     </div>
                     <span class="text-[9px] text-slate-500 group-hover:text-slate-400 font-semibold bg-slate-950 px-1.5 py-0.5 rounded shrink-0">${file.loc} LOC</span>
@@ -546,7 +546,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
             try {
                 const displayHeader = document.getElementById('metadata-header');
                 displayHeader.classList.remove('hidden');
-                document.getElementById('meta-icon').innerText = filepath.endsWith('.rs') ? '🦀' : '📄';
+                document.getElementById('meta-icon').innerText = filepath.endsWith('.rs') ? '🦀' : filepath.endsWith('.go') ? '🐹' : '📄';
                 document.getElementById('meta-title').innerText = filepath;
                 document.getElementById('meta-subtitle').innerText = 'Loading file contents...';
 
@@ -567,7 +567,7 @@ pub const DASHBOARD_HTML: &str = r#"<!DOCTYPE html>
                 document.getElementById('code-viewer-size').innerText = `${viewCode.length} bytes`;
                 
                 const hashesPanel = document.getElementById('file-hashes-panel');
-                if (filepath.endsWith('.rs')) {
+                if (filepath.endsWith('.rs') || filepath.endsWith('.go')) {
                     hashesPanel.classList.remove('hidden');
                     const infoRes = await fetch(`/file-info/${filepath}`);
                     if (infoRes.ok) {

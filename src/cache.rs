@@ -124,7 +124,7 @@ impl DaemonCache {
                     continue;
                 }
             }
-            if !filepath.ends_with(".rs") {
+            if !filepath.ends_with(".rs") && !filepath.ends_with(".go") {
                 continue;
             }
             if let Some(segment) = self.skeleton_segments.get(filepath) {

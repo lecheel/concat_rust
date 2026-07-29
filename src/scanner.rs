@@ -100,6 +100,7 @@ fn process_file(
 
     match rule.kind {
         FileKind::Rust => process_rust(raw_code, rel_path, no_format, max_width, ext, kind),
+        FileKind::Go => process_go(raw_code, rel_path, no_format, ext, kind),
         FileKind::Structured => process_structured(raw_code, rel_path, rule, ext, kind),
         FileKind::Raw => process_raw(raw_code, rel_path, ext, kind),
     }
@@ -127,6 +128,59 @@ fn process_rust(
 
     // 3. Compress into skeleton segment and bodies
     let (hashes, skeleton_segment) = compress_code(&cleaned, rel_path);
+
+    let loc = cleaned.lines().count();
+    let byte_size = cleaned.len();
+
+    let bodies: Vec<(String, BodyMeta, String)> = hashes
+        .into_iter()
+        .map(|(hash, filepath, body, body_loc)| {
+            (
+                hash,
+                BodyMeta {
+                    filepath,
+                    loc: body_loc,
+                    byte_size: body.len(),
+                },
+                body,
+            )
+        })
+        .collect();
+
+    ProcessedFile {
+        rel_path: rel_path.to_string(),
+        extension,
+        kind,
+        loc,
+        byte_size,
+        code: cleaned,
+        skeleton_segment: Some(skeleton_segment),
+        bodies,
+    }
+}
+
+fn process_go(
+    raw_code: &str,
+    rel_path: &str,
+    no_format: bool,
+    extension: String,
+    kind: FileKind,
+) -> ProcessedFile {
+    // 1. Format with gofmt (if available)
+    let formatted = if !no_format {
+        crate::compress_go::run_gofmt(raw_code)
+    } else {
+        raw_code.to_string()
+    };
+
+    // 2. Strip comments
+    let no_comments = crate::compress_go::strip_go_comments(&formatted);
+
+    // 3. Remove empty lines
+    let cleaned = remove_empty_lines(&no_comments);
+
+    // 4. Compress into skeleton segment and bodies
+    let (hashes, skeleton_segment) = crate::compress_go::compress_go_code(&cleaned, rel_path);
 
     let loc = cleaned.lines().count();
     let byte_size = cleaned.len();
@@ -235,6 +289,12 @@ fn walk_directory_recursive(
                 }
                 walk_directory_recursive(base, &path, config, files);
             } else if config.rule_for(&path).is_some() {
+                // Skip Go test files
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.ends_with("_test.go") {
+                        continue;
+                    }
+                }
                 files.push(path);
             }
         }

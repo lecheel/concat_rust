@@ -6,6 +6,7 @@ use std::path::Path;
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub enum FileKind {
     Rust,       // Full AST compression, goes into skeleton
+    Go,         // Go AST compression, goes into skeleton
     Structured, // Strip comments, collapse whitespace, cache optional
     Raw,        // Serve verbatim from disk
 }
@@ -37,6 +38,22 @@ impl Default for ScanConfig {
                     include_in_skeleton: true,
                     strip_comments: false, // handled by rust pipeline
                     collapse_whitespace: false,
+                },
+                // ── Go: full compression ──
+                FileTypeRule {
+                    extension: "go".into(),
+                    kind: FileKind::Go,
+                    include_in_skeleton: true,
+                    strip_comments: false, // handled by go pipeline
+                    collapse_whitespace: false,
+                },
+                // ── Go module file: structured ──
+                FileTypeRule {
+                    extension: "mod".into(),
+                    kind: FileKind::Structured,
+                    include_in_skeleton: false,
+                    strip_comments: true,
+                    collapse_whitespace: true,
                 },
                 // ── Structured: strip comments, preserve structure ──
                 FileTypeRule {
@@ -114,6 +131,7 @@ impl Default for ScanConfig {
                 ".idea".into(),
                 ".vscode".into(),
                 ".concat_rust_central".into(),
+                "vendor".into(),
             ],
             skip_patterns: vec![
                 "*.lock".into(),

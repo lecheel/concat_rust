@@ -202,7 +202,11 @@ pub async fn get_catalog(State(state): State<AppState>) -> Response {
             loc: entry.loc,
             num_bodies: entry.body_hashes.len(),
             top_hashes: body_infos,
-            file_type: "rust".to_string(),
+            file_type: if filepath.ends_with(".go") {
+                "go".to_string()
+            } else {
+                "rust".to_string()
+            },
             source: "cache".to_string(),
         });
     }
@@ -313,7 +317,7 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
     let mut file_entry = db.files.get(&path);
     let mut actual_path = path.clone();
 
-    if path.ends_with(".rs") {
+    if path.ends_with(".rs") || path.ends_with(".go") {
         if file_entry.is_none() {
             for repo in &repo_ids {
                 let candidate = format!("{}/{}", repo, path);
@@ -361,7 +365,7 @@ pub async fn get_file_info(Path(path): Path<String>, State(state): State<AppStat
             StatusCode::NOT_FOUND,
             vec![],
             format!(
-                "Rust file {} not in cache",
+                "Source file {} not in cache",
                 strip_repo_prefix(&path, &repo_ids)
             ),
         );
@@ -420,7 +424,7 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
     let path = path.strip_prefix('/').unwrap_or(&path).to_string();
     let repo_ids = collect_repo_ids(&state).await;
     let display_path = strip_repo_prefix(&path, &repo_ids);
-    if path.ends_with(".rs") {
+    if path.ends_with(".rs") || path.ends_with(".go") {
         let mut db = state.cache.lock().await;
         let mut resolved_key = if db.files.contains_key(&path) {
             Some(path.clone())
@@ -465,7 +469,7 @@ pub async fn get_file(Path(path): Path<String>, State(state): State<AppState>) -
         return build_response(
             StatusCode::NOT_FOUND,
             vec![],
-            "Rust file not indexed yet. Run sync first.".to_string(),
+            "Source file not indexed yet. Run sync first.".to_string(),
         );
     }
     let mut full_path = state.central_dir.join(&path);

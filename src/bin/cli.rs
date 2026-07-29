@@ -141,6 +141,9 @@ const ROOT_LEVEL_FILES: &[&str] = &[
     "Makefile",
     "README.md",
     "build.rs",
+    "go.mod",
+    "go.sum",
+    "go.work",
 ];
 
 fn should_auto_prefix_src(path: &str) -> bool {
@@ -149,6 +152,10 @@ fn should_auto_prefix_src(path: &str) -> bool {
     }
     let filename = path.rsplit('/').next().unwrap_or(path);
     if ROOT_LEVEL_FILES.contains(&filename) {
+        return false;
+    }
+    // Go files don't use the src/ convention
+    if path.ends_with(".go") {
         return false;
     }
     if path.contains('/') {
@@ -161,10 +168,15 @@ fn should_auto_prefix_src(path: &str) -> bool {
 }
 
 /// Detects if a path already starts with a repo-id prefix (e.g., "grab/src/main.rs").
+/// Common Go top-level directories that should not be mistaken for repo prefixes.
+fn is_go_dir(name: &str) -> bool {
+    matches!(name, "cmd" | "internal" | "pkg")
+}
+
 fn has_repo_prefix(path: &str) -> bool {
     if let Some(slash_pos) = path.find('/') {
         let first = &path[..slash_pos];
-        !first.contains('.') && first != "src"
+        !first.contains('.') && first != "src" && !is_go_dir(first)
     } else {
         false
     }

@@ -2,6 +2,7 @@ pub mod stable_hash;
 pub mod fingerprint;
 pub mod cache;
 pub mod compress;
+pub mod compress_go;
 pub mod config;
 pub mod strip_generic;
 pub mod rustfmt;

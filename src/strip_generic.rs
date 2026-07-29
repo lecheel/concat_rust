@@ -6,7 +6,7 @@ pub fn strip_comments(code: &str, extension: &str) -> String {
         "toml" | "env" => strip_hash_comments(code),
         "yml" | "yaml" | "sh" => strip_hash_comments(code),
         "sql" => strip_sql_comments(code),
-        "proto" => strip_c_style_comments(code),
+        "proto" | "mod" => strip_c_style_comments(code),
         "json" => code.to_string(),     // JSON has no comments
         _ => strip_hash_comments(code), // safe default
     }
