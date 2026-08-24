@@ -1,4 +1,4 @@
-# concat_rust (v2)
+# concat_rust_go (v2)
 
 **Provide the overall architecture first, then retrieve specific implementations on demand.**
 
