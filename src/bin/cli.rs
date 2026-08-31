@@ -55,7 +55,11 @@ fn interruptible_sleep(duration: std::time::Duration) -> bool {
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "concat_rust_cli", about = "CLI for the concat_rust daemon", allow_external_subcommands = true)]
+#[command(
+    name = "concat_rust_cli",
+    about = "CLI for the concat_rust daemon",
+    allow_external_subcommands = true
+)]
 struct Cli {
     // Made optional so running `cli` with no args defaults to `cli use`
     #[command(subcommand)]

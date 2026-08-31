@@ -365,15 +365,21 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 
-const ROOT_LEVEL_FILES = [
+const ROOT_LEVEL_FILES = new Set([
   "Cargo.toml", "Cargo.lock", "docker-compose.yml", "docker-compose.yaml",
-  "Dockerfile", ".env", ".env.example", "Makefile", "README.md", "build.rs"
-];
+  "Dockerfile", ".env", ".env.example", "Makefile", "README.md", "build.rs",
+  "go.mod", "go.sum", "go.work"
+]);
+
+function isGoDir(name) {
+  return name === "cmd" || name === "internal" || name === "pkg";
+}
 
 function shouldAutoPrefixSrc(path) {
   if (path.startsWith("src/") || path.includes("/src/")) return false;
-  const filename = path.split('/').pop();
-  if (ROOT_LEVEL_FILES.includes(filename)) return false;
+  const filename = path.split('/').pop() || path;
+  if (ROOT_LEVEL_FILES.has(filename)) return false;
+  if (path.endsWith(".go")) return false; // Go files don't use the src/ convention
   if (path.includes('/')) return true;
   if (path.endsWith('.rs')) return true;
   return false;
@@ -383,7 +389,7 @@ function hasRepoPrefix(path) {
   const slashPos = path.indexOf('/');
   if (slashPos === -1) return false;
   const first = path.substring(0, slashPos);
-  return !first.includes('.') && first !== 'src';
+  return !first.includes('.') && first !== 'src' && !isGoDir(first);
 }
 
 function resolvePath(input, activeRepo) {
